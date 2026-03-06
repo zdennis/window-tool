@@ -113,6 +113,23 @@ window-tool uses the macOS Accessibility API (`AXUIElement`) for window operatio
 
 For screen information, it uses `NSScreen` APIs and converts coordinates from macOS bottom-left origin to the top-left origin used by the Accessibility API for window positioning.
 
+## Releasing
+
+Releases are tagged on the `main` branch using `release.sh`, which follows [semver](https://semver.org/) with a `vM.m.p` format.
+
+```sh
+./release.sh              # print current version
+./release.sh patch        # bump patch: v0.1.0 -> v0.1.1
+./release.sh minor        # bump minor: v0.1.0 -> v0.2.0
+./release.sh major        # bump major: v0.1.0 -> v1.0.0
+./release.sh 2.0.0        # set explicit version (prompts for confirmation)
+```
+
+The script will:
+1. Verify you are on the `main` branch with a clean working tree
+2. Compute the new version (or prompt for confirmation if explicit)
+3. Create a git tag and push it to origin
+
 ## License
 
 MIT
