@@ -140,6 +140,28 @@ func moveByTitleCommand(bundleId: String, titlePattern: String, x: CGFloat, y: C
     print("Moved \(matching.count) window(s) matching '\(titlePattern)'")
 }
 
+func listOpenWindowsCommand() {
+    let apps = NSWorkspace.shared.runningApplications
+    var entries: [(bundleId: String, name: String)] = []
+    var seen = Set<String>()
+    for app in apps {
+        guard let bundleId = app.bundleIdentifier, !seen.contains(bundleId) else { continue }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var windowsRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
+        if let windows = windowsRef as? [AXUIElement], !windows.isEmpty {
+            seen.insert(bundleId)
+            entries.append((bundleId: bundleId, name: app.localizedName ?? "Unknown"))
+        }
+    }
+    let sorted = entries.sorted(by: { $0.name.lowercased() < $1.name.lowercased() })
+    let maxWidth = sorted.map { $0.name.count }.max() ?? 0
+    for entry in sorted {
+        let padded = entry.name.padding(toLength: maxWidth, withPad: " ", startingAt: 0)
+        print("\(padded)  \(entry.bundleId)")
+    }
+}
+
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
         print("0")
@@ -160,6 +182,7 @@ func usage() {
       count                                    Print number of windows
       move <index> <x> <y> [<width> <height>]  Move/resize window by index
       move-by-title <pattern> <x> <y> [<width> <height>]  Move/resize windows matching title
+      list-open-windows                        List bundle IDs of apps with open windows
       screens                                  List all displays with bounds
       active-screen                            Print active screen bounds (x, y, width, height)
 
@@ -223,6 +246,8 @@ case "move-by-title":
         height = CGFloat(Double(args[5])!)
     }
     moveByTitleCommand(bundleId: bundleId, titlePattern: pattern, x: x, y: y, width: width, height: height)
+case "list-open-windows":
+    listOpenWindowsCommand()
 case "screens":
     screensCommand()
 case "active-screen":
