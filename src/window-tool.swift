@@ -162,6 +162,87 @@ func listOpenWindowsCommand() {
     }
 }
 
+func focusCommand(bundleId: String, index: Int) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard index >= 0 && index < windows.count else {
+        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+        exit(1)
+    }
+    let window = windows[index]
+    // Bring app to front
+    let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
+    runningApps.first?.activate()
+    // Raise the specific window
+    AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
+    AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+}
+
+func focusByTitleCommand(bundleId: String, titlePattern: String) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
+        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
+        exit(1)
+    }
+    let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
+    runningApps.first?.activate()
+    AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
+    AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+}
+
+func shakeCommand(bundleId: String, index: Int, offset: Int, count: Int, delay shakeDelay: Double) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard index >= 0 && index < windows.count else {
+        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+        exit(1)
+    }
+    let window = windows[index]
+    let originalX = window.position.x
+    let originalY = window.position.y
+
+    for _ in 0..<count {
+        moveWindow(window.element, x: originalX + CGFloat(offset), y: originalY)
+        Thread.sleep(forTimeInterval: shakeDelay)
+        moveWindow(window.element, x: originalX - CGFloat(offset), y: originalY)
+        Thread.sleep(forTimeInterval: shakeDelay)
+    }
+    // Restore original position
+    moveWindow(window.element, x: originalX, y: originalY)
+}
+
+func shakeByTitleCommand(bundleId: String, titlePattern: String, offset: Int, count: Int, delay shakeDelay: Double) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
+        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
+        exit(1)
+    }
+    let originalX = window.position.x
+    let originalY = window.position.y
+
+    for _ in 0..<count {
+        moveWindow(window.element, x: originalX + CGFloat(offset), y: originalY)
+        Thread.sleep(forTimeInterval: shakeDelay)
+        moveWindow(window.element, x: originalX - CGFloat(offset), y: originalY)
+        Thread.sleep(forTimeInterval: shakeDelay)
+    }
+    moveWindow(window.element, x: originalX, y: originalY)
+}
+
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
         print("0")
@@ -182,6 +263,10 @@ func usage() {
       count                                    Print number of windows
       move <index> <x> <y> [<width> <height>]  Move/resize window by index
       move-by-title <pattern> <x> <y> [<width> <height>]  Move/resize windows matching title
+      focus <index>                             Bring window to front by index
+      focus-by-title <pattern>                 Bring window to front by title match
+      shake <index> [offset] [count] [delay]   Shake a window by index
+      shake-by-title <pattern> [offset] [count] [delay]  Shake a window by title match
       list-open-windows                        List bundle IDs of apps with open windows
       screens                                  List all displays with bounds
       active-screen                            Print active screen bounds (x, y, width, height)
@@ -246,6 +331,38 @@ case "move-by-title":
         height = CGFloat(Double(args[5])!)
     }
     moveByTitleCommand(bundleId: bundleId, titlePattern: pattern, x: x, y: y, width: width, height: height)
+case "focus":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool focus <index>\n", stderr)
+        exit(1)
+    }
+    focusCommand(bundleId: bundleId, index: Int(args[1])!)
+case "focus-by-title":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool focus-by-title <pattern>\n", stderr)
+        exit(1)
+    }
+    focusByTitleCommand(bundleId: bundleId, titlePattern: args[1])
+case "shake":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool shake <index> [offset] [count] [delay]\n", stderr)
+        exit(1)
+    }
+    let index = Int(args[1])!
+    let offset = args.count >= 3 ? Int(args[2])! : 12
+    let count = args.count >= 4 ? Int(args[3])! : 6
+    let shakeDelay = args.count >= 5 ? Double(args[4])! : 0.04
+    shakeCommand(bundleId: bundleId, index: index, offset: offset, count: count, delay: shakeDelay)
+case "shake-by-title":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool shake-by-title <pattern> [offset] [count] [delay]\n", stderr)
+        exit(1)
+    }
+    let pattern = args[1]
+    let offset = args.count >= 3 ? Int(args[2])! : 12
+    let count = args.count >= 4 ? Int(args[3])! : 6
+    let shakeDelay = args.count >= 5 ? Double(args[4])! : 0.04
+    shakeByTitleCommand(bundleId: bundleId, titlePattern: pattern, offset: offset, count: count, delay: shakeDelay)
 case "list-open-windows":
     listOpenWindowsCommand()
 case "screens":
