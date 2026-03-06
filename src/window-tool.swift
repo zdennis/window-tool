@@ -2,20 +2,30 @@ import Cocoa
 
 // MARK: - Accessibility Helpers
 
+/// Returns the AXUIElement for a running application matching the given bundle identifier.
+/// Returns nil if no running application with that bundle ID is found.
 func getAppElement(bundleId: String) -> AXUIElement? {
     let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
     guard let app = apps.first else { return nil }
     return AXUIElementCreateApplication(app.processIdentifier)
 }
 
+/// Holds metadata about a single window retrieved via the Accessibility API.
 struct WindowInfo {
+    /// The underlying AXUIElement handle for this window.
     let element: AXUIElement
+    /// The zero-based index of the window in the application's window list.
     let id: Int
+    /// The window's title (may be empty).
     let title: String
+    /// The window's top-left screen position.
     let position: CGPoint
+    /// The window's dimensions.
     let size: CGSize
 }
 
+/// Retrieves all windows for the given application element.
+/// Each window is returned as a `WindowInfo` with its index, title, position, and size.
 func getWindows(appElement: AXUIElement) -> [WindowInfo] {
     var windowsRef: CFTypeRef?
     AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
@@ -46,6 +56,7 @@ func getWindows(appElement: AXUIElement) -> [WindowInfo] {
     return result
 }
 
+/// Moves a window to the specified screen coordinates.
 func moveWindow(_ window: AXUIElement, x: CGFloat, y: CGFloat) {
     var point = CGPoint(x: x, y: y)
     if let value = AXValueCreate(.cgPoint, &point) {
@@ -53,6 +64,7 @@ func moveWindow(_ window: AXUIElement, x: CGFloat, y: CGFloat) {
     }
 }
 
+/// Resizes a window to the specified width and height.
 func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
     var size = CGSize(width: width, height: height)
     if let value = AXValueCreate(.cgSize, &size) {
@@ -62,6 +74,8 @@ func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
 
 // MARK: - Screen Helpers
 
+/// Prints info for all connected displays.
+/// Output columns: index, frame origin, frame size, visible origin, visible size, and flags ([main], [mouse]).
 func screensCommand() {
     let mouseLocation = NSEvent.mouseLocation
     for (index, screen) in NSScreen.screens.enumerated() {
@@ -78,6 +92,8 @@ func screensCommand() {
     }
 }
 
+/// Prints the visible bounds of the screen containing the mouse cursor.
+/// Output: tab-separated x, y (top-left origin), width, height of the usable area.
 func activeScreenCommand() {
     // Return the screen containing the mouse cursor (the "active" screen)
     let mouseLocation = NSEvent.mouseLocation
@@ -92,6 +108,8 @@ func activeScreenCommand() {
 
 // MARK: - Commands
 
+/// Lists all windows for the given application.
+/// Output columns (tab-separated): index, position (x,y), size (WxH), title.
 func listCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
@@ -103,6 +121,8 @@ func listCommand(bundleId: String) {
     }
 }
 
+/// Moves (and optionally resizes) a window by its index.
+/// If width and height are provided, the window is also resized.
 func moveCommand(bundleId: String, index: Int, x: CGFloat, y: CGFloat, width: CGFloat?, height: CGFloat?) {
     guard let app = getAppElement(bundleId: bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
@@ -120,6 +140,8 @@ func moveCommand(bundleId: String, index: Int, x: CGFloat, y: CGFloat, width: CG
     }
 }
 
+/// Moves (and optionally resizes) all windows whose title contains the given pattern.
+/// Uses substring matching. Prints the number of windows moved.
 func moveByTitleCommand(bundleId: String, titlePattern: String, x: CGFloat, y: CGFloat, width: CGFloat?, height: CGFloat?) {
     guard let app = getAppElement(bundleId: bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
@@ -140,6 +162,8 @@ func moveByTitleCommand(bundleId: String, titlePattern: String, x: CGFloat, y: C
     print("Moved \(matching.count) window(s) matching '\(titlePattern)'")
 }
 
+/// Lists all running applications that have at least one open window.
+/// Output columns: application name (padded), bundle identifier. Sorted alphabetically by name.
 func listOpenWindowsCommand() {
     let apps = NSWorkspace.shared.runningApplications
     var entries: [(bundleId: String, name: String)] = []
@@ -162,6 +186,8 @@ func listOpenWindowsCommand() {
     }
 }
 
+/// Brings a window to the front by its index.
+/// Activates the application and raises the specific window.
 func focusCommand(bundleId: String, index: Int) {
     guard let app = getAppElement(bundleId: bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
@@ -181,6 +207,8 @@ func focusCommand(bundleId: String, index: Int) {
     AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
 }
 
+/// Brings the first window whose title contains the given pattern to the front.
+/// Activates the application and raises the matching window.
 func focusByTitleCommand(bundleId: String, titlePattern: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
@@ -197,6 +225,12 @@ func focusByTitleCommand(bundleId: String, titlePattern: String) {
     AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
 }
 
+/// Shakes a window horizontally by its index to draw attention.
+/// - Parameters:
+///   - offset: Horizontal pixel displacement per shake (default: 12).
+///   - count: Number of shake cycles (default: 6).
+///   - shakeDelay: Seconds between each movement (default: 0.04).
+/// The window is restored to its original position after shaking.
 func shakeCommand(bundleId: String, index: Int, offset: Int, count: Int, delay shakeDelay: Double) {
     guard let app = getAppElement(bundleId: bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
@@ -221,6 +255,8 @@ func shakeCommand(bundleId: String, index: Int, offset: Int, count: Int, delay s
     moveWindow(window.element, x: originalX, y: originalY)
 }
 
+/// Shakes the first window whose title contains the given pattern.
+/// Same behavior as `shakeCommand` but targets by title substring match.
 func shakeByTitleCommand(bundleId: String, titlePattern: String, offset: Int, count: Int, delay shakeDelay: Double) {
     guard let app = getAppElement(bundleId: bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
@@ -243,6 +279,7 @@ func shakeByTitleCommand(bundleId: String, titlePattern: String, offset: Int, co
     moveWindow(window.element, x: originalX, y: originalY)
 }
 
+/// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
         print("0")
@@ -254,6 +291,7 @@ func countCommand(bundleId: String) {
 
 // MARK: - Main
 
+/// Prints the CLI usage/help text.
 func usage() {
     let help = """
     Usage: window-tool [--app <bundle-id>] <command> [args...]
