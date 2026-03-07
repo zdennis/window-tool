@@ -675,6 +675,51 @@ func stackCommand(bundleId: String, offsetStep: Int) {
     print("Stacked \(windows.count) window(s)")
 }
 
+/// Watches for window changes and prints updates.
+func watchCommand(bundleId: String, interval: Double) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+
+    struct WindowState: Equatable {
+        let title: String
+        let x: Int
+        let y: Int
+        let width: Int
+        let height: Int
+    }
+
+    func snapshot() -> [WindowState] {
+        let windows = getWindows(appElement: app)
+        return windows.map { WindowState(title: $0.title, x: Int($0.position.x), y: Int($0.position.y),
+                                          width: Int($0.size.width), height: Int($0.size.height)) }
+    }
+
+    func printState(_ windows: [WindowState]) {
+        for (i, w) in windows.enumerated() {
+            print("\(i)\t\(w.x),\(w.y)\t\(w.width)x\(w.height)\t\(w.title)")
+        }
+    }
+
+    var previous = snapshot()
+    printState(previous)
+    fflush(stdout)
+
+    signal(SIGINT) { _ in exit(0) }
+
+    while true {
+        Thread.sleep(forTimeInterval: interval)
+        let current = snapshot()
+        if current != previous {
+            print("---")
+            printState(current)
+            fflush(stdout)
+            previous = current
+        }
+    }
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -710,6 +755,7 @@ func usage() {
       save-layout <file>                       Save window layout to a JSON file
       restore-layout <file>                    Restore window layout from a JSON file
       stack [offset]                           Cascade windows with offset (default: 30)
+      watch [interval]                         Watch for window changes (default: 1.0s)
 
     Snap positions:
       left, right, top, bottom, top-left, top-right,
@@ -761,7 +807,7 @@ let accessibilityCommands: Set<String> = [
     "snap", "snap-by-title",
     "move-to-screen", "move-to-screen-by-title",
     "minimize", "minimize-by-title", "restore",
-    "save-layout", "restore-layout", "stack",
+    "save-layout", "restore-layout", "stack", "watch",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -878,6 +924,9 @@ case "restore-layout":
 case "stack":
     let offset = args.count >= 2 ? Int(args[1])! : 30
     stackCommand(bundleId: bundleId, offsetStep: offset)
+case "watch":
+    let interval = args.count >= 2 ? Double(args[1])! : 1.0
+    watchCommand(bundleId: bundleId, interval: interval)
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
