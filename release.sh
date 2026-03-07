@@ -104,18 +104,25 @@ if [ "$local_sha" != "$remote_sha" ]; then
   exit 1
 fi
 
-# Build to ensure we're tagging a known-good binary
-echo "Building..."
-if ! ./build.sh; then
-  echo "Error: Build failed. Fix build errors before releasing." >&2
-  exit 1
-fi
-
 # Check tag doesn't already exist
 if git tag --list | grep -qx "$new_version"; then
   echo "Error: Tag $new_version already exists." >&2
   exit 1
 fi
+
+# Update VERSION in source and rebuild
+version_number="${new_version#v}"
+sed -i '' "s/^let VERSION = \".*\"/let VERSION = \"${version_number}\"/" src/window-tool.swift
+echo "Building..."
+if ! ./build.sh; then
+  echo "Error: Build failed after version bump. Fix build errors before releasing." >&2
+  git checkout src/window-tool.swift
+  exit 1
+fi
+
+git add src/window-tool.swift
+git commit -m "Bump version to $new_version"
+git push origin main
 
 short_sha=$(git rev-parse --short HEAD)
 echo "Tagging $new_version at $short_sha..."

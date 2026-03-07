@@ -26,7 +26,7 @@ When the user invokes this skill:
 
 1. **Verify on main branch** - if not, inform the user and stop
 2. **Verify no uncommitted changes** to tracked files - untracked files are fine
-3. **Build first** - run `./build.sh` to ensure the binary compiles cleanly before releasing
+3. **Don't build separately** - `./release.sh` handles building after bumping the VERSION constant
 
 ### If an argument is provided (patch, minor, major, or explicit version):
 

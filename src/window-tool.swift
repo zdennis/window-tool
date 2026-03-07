@@ -1,6 +1,8 @@
 import Cocoa
 import Foundation
 
+let VERSION = "0.3.0"
+
 // MARK: - Configuration
 
 struct Config {
@@ -663,6 +665,7 @@ func usage() {
     Options:
       --app <bundle-id>   Target application (default: com.googlecode.iterm2)
       --json              Output in JSON format
+      --version, -v       Print version and exit
 
     Examples:
       window-tool list
@@ -692,6 +695,11 @@ if let appIdx = args.firstIndex(of: "--app") {
 
 guard let command = args.first else {
     usage()
+    exit(0)
+}
+
+if command == "--version" || command == "-v" {
+    print("window-tool \(VERSION)")
     exit(0)
 }
 
