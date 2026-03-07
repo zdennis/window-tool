@@ -63,15 +63,15 @@ case "$arg" in
 
     # Parse current version
     version="${latest_tag#v}"
-    IFS='.' read -r major minor patch <<< "$version"
+    IFS='.' read -r cur_major cur_minor cur_patch <<< "$version"
 
     case "$arg" in
-      patch) patch=$((patch + 1)) ;;
-      minor) minor=$((minor + 1)); patch=0 ;;
-      major) major=$((major + 1)); minor=0; patch=0 ;;
+      patch) cur_patch=$((cur_patch + 1)) ;;
+      minor) cur_minor=$((cur_minor + 1)); cur_patch=0 ;;
+      major) cur_major=$((cur_major + 1)); cur_minor=0; cur_patch=0 ;;
     esac
 
-    new_version="v${major}.${minor}.${patch}"
+    new_version="v${cur_major}.${cur_minor}.${cur_patch}"
     ;;
   *)
     # Explicit version — validate it looks like semver
@@ -92,13 +92,31 @@ case "$arg" in
     ;;
 esac
 
+# Ensure local main is up to date with remote
+git fetch origin main --quiet
+local_sha=$(git rev-parse HEAD)
+remote_sha=$(git rev-parse origin/main)
+if [ "$local_sha" != "$remote_sha" ]; then
+  echo "Error: Local main ($local_sha) differs from origin/main ($remote_sha)." >&2
+  echo "Pull or push first to sync." >&2
+  exit 1
+fi
+
+# Build to ensure we're tagging a known-good binary
+echo "Building..."
+if ! ./build.sh; then
+  echo "Error: Build failed. Fix build errors before releasing." >&2
+  exit 1
+fi
+
 # Check tag doesn't already exist
 if git tag --list | grep -qx "$new_version"; then
   echo "Error: Tag $new_version already exists." >&2
   exit 1
 fi
 
-echo "Tagging $new_version..."
+short_sha=$(git rev-parse --short HEAD)
+echo "Tagging $new_version at $short_sha..."
 git tag "$new_version"
 git push origin "$new_version"
-echo "Released $new_version"
+echo "Released $new_version ($short_sha)"
