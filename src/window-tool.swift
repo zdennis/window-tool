@@ -110,6 +110,16 @@ func getAppElement(bundleId: String) -> AXUIElement? {
     return AXUIElementCreateApplication(app.processIdentifier)
 }
 
+/// Returns the CGWindowID for an AXUIElement window, or nil if unavailable.
+func getCGWindowID(_ element: AXUIElement) -> CGWindowID? {
+    var windowID: CGWindowID = 0
+    let result = _AXUIElementGetWindow(element, &windowID)
+    return result == .success ? windowID : nil
+}
+
+@_silgen_name("_AXUIElementGetWindow")
+func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 /// Holds metadata about a single window retrieved via the Accessibility API.
 struct WindowInfo {
     /// The underlying AXUIElement handle for this window.
@@ -122,6 +132,8 @@ struct WindowInfo {
     let position: CGPoint
     /// The window's dimensions.
     let size: CGSize
+    /// The Core Graphics window ID (stable for the lifetime of the window).
+    let windowID: CGWindowID?
 }
 
 /// Retrieves all windows for the given application element.
@@ -152,7 +164,7 @@ func getWindows(appElement: AXUIElement) -> [WindowInfo] {
             AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
         }
 
-        result.append(WindowInfo(element: window, id: index, title: title, position: position, size: size))
+        result.append(WindowInfo(element: window, id: index, title: title, position: position, size: size, windowID: getCGWindowID(window)))
     }
     return result
 }
@@ -290,19 +302,22 @@ func checkAccessibility() throws {
 // MARK: - Commands
 
 /// Lists all windows for the given application.
-/// Output columns (tab-separated): index, position (x,y), size (WxH), title.
+/// Output columns (tab-separated): index, window_id, position (x,y), size (WxH), title.
 func listCommand(bundleId: String) throws {
     let app = try requireApp(bundleId)
     let windows = getWindows(appElement: app)
     if config.jsonOutput {
         let items = windows.map { w in
-            ["index": w.id, "x": Int(w.position.x), "y": Int(w.position.y),
-             "width": Int(w.size.width), "height": Int(w.size.height), "title": w.title] as [String: Any]
+            var dict: [String: Any] = ["index": w.id, "x": Int(w.position.x), "y": Int(w.position.y),
+             "width": Int(w.size.width), "height": Int(w.size.height), "title": w.title]
+            if let wid = w.windowID { dict["window_id"] = Int(wid) }
+            return dict
         }
         printJSON(items)
     } else {
         for w in windows {
-            print("\(w.id)\t\(Int(w.position.x)),\(Int(w.position.y))\t\(Int(w.size.width))x\(Int(w.size.height))\t\(w.title)")
+            let wid = w.windowID.map { String($0) } ?? "?"
+            print("\(w.id)\t\(wid)\t\(Int(w.position.x)),\(Int(w.position.y))\t\(Int(w.size.width))x\(Int(w.size.height))\t\(w.title)")
         }
     }
 }
@@ -528,30 +543,60 @@ func restoreCommand(bundleId: String) throws {
     print("Restored \(restored) window(s)")
 }
 
+/// Reads an AX boolean attribute, returning false if unavailable.
+func axBool(_ element: AXUIElement, _ attribute: String) -> Bool {
+    var ref: CFTypeRef?
+    AXUIElementCopyAttributeValue(element, attribute as CFString, &ref)
+    return (ref as? Bool) ?? false
+}
+
+/// Reads an AX string attribute, returning nil if unavailable.
+func axString(_ element: AXUIElement, _ attribute: String) -> String? {
+    var ref: CFTypeRef?
+    AXUIElementCopyAttributeValue(element, attribute as CFString, &ref)
+    return ref as? String
+}
+
 /// Prints detailed info for a single window by index.
 func infoCommand(bundleId: String, index: Int) throws {
     let w = try resolveWindow(bundleId: bundleId, selector: .byIndex(index))
 
-    var minimizedRef: CFTypeRef?
-    AXUIElementCopyAttributeValue(w.element, kAXMinimizedAttribute as CFString, &minimizedRef)
-    let minimized = (minimizedRef as? Bool) ?? false
-
-    var fullscreenRef: CFTypeRef?
-    AXUIElementCopyAttributeValue(w.element, "AXFullScreen" as CFString, &fullscreenRef)
-    let fullscreen = (fullscreenRef as? Bool) ?? false
+    let minimized = axBool(w.element, kAXMinimizedAttribute as String)
+    let fullscreen = axBool(w.element, "AXFullScreen")
+    let focused = axBool(w.element, kAXFocusedAttribute as String)
+    let main = axBool(w.element, kAXMainAttribute as String)
+    let modal = axBool(w.element, "AXModal")
+    let role = axString(w.element, kAXRoleAttribute as String)
+    let subrole = axString(w.element, kAXSubroleAttribute as String)
+    let document = axString(w.element, kAXDocumentAttribute as String)
 
     if config.jsonOutput {
-        printJSON(["index": w.id, "title": w.title,
-                   "x": Int(w.position.x), "y": Int(w.position.y),
-                   "width": Int(w.size.width), "height": Int(w.size.height),
-                   "minimized": minimized, "fullscreen": fullscreen] as [String: Any])
+        var dict: [String: Any] = [
+            "index": w.id, "title": w.title,
+            "x": Int(w.position.x), "y": Int(w.position.y),
+            "width": Int(w.size.width), "height": Int(w.size.height),
+            "minimized": minimized, "fullscreen": fullscreen,
+            "focused": focused, "main": main, "modal": modal
+        ]
+        if let wid = w.windowID { dict["window_id"] = Int(wid) }
+        if let role = role { dict["role"] = role }
+        if let subrole = subrole { dict["subrole"] = subrole }
+        if let document = document { dict["document"] = document }
+        printJSON(dict)
     } else {
         print("index:\t\(w.id)")
+        if let wid = w.windowID { print("window_id:\t\(wid)") }
         print("title:\t\(w.title)")
         print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")
         print("size:\t\(Int(w.size.width))x\(Int(w.size.height))")
+        if let role = role { print("role:\t\(role)") }
+        if let subrole = subrole { print("subrole:\t\(subrole)") }
+        print("focused:\t\(focused)")
+        print("main:\t\(main)")
         print("minimized:\t\(minimized)")
         print("fullscreen:\t\(fullscreen)")
+        print("modal:\t\(modal)")
+        if let document = document { print("document:\t\(document)") }
     }
 }
 
@@ -731,7 +776,7 @@ func usage() {
       fullscreen <index>                       Enter macOS fullscreen mode
       fullscreen-by-title <pattern>            Enter fullscreen by title match
       info <index>                             Show detailed info for a window
-      list                                     List all windows with index, position, size, and title
+      list                                     List all windows with index, window ID, position, size, and title
       list-open-windows                        List apps with open windows
       maximize <index>                         Maximize window to fill screen
       maximize-by-title <pattern>              Maximize windows matching title
