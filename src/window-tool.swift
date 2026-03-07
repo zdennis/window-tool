@@ -106,6 +106,19 @@ func activeScreenCommand() {
     print("\(Int(frame.origin.x))\t\(Int(topLeftY))\t\(Int(visible.width))\t\(Int(visible.height))")
 }
 
+// MARK: - Accessibility Check
+
+/// Checks if the process has Accessibility API access and exits with a helpful message if not.
+func checkAccessibility() {
+    let trusted = AXIsProcessTrusted()
+    if !trusted {
+        fputs("Error: Accessibility access is not enabled.\n", stderr)
+        fputs("Grant access in System Settings > Privacy & Security > Accessibility.\n", stderr)
+        fputs("Add this terminal app or the window-tool binary.\n", stderr)
+        exit(1)
+    }
+}
+
 // MARK: - Commands
 
 /// Lists all windows for the given application.
@@ -332,6 +345,16 @@ if let appIdx = args.firstIndex(of: "--app"), appIdx + 1 < args.count {
 guard let command = args.first else {
     usage()
     exit(0)
+}
+
+// Commands that need Accessibility access
+let accessibilityCommands: Set<String> = [
+    "list", "count", "move", "move-by-title",
+    "focus", "focus-by-title", "shake", "shake-by-title",
+    "list-open-windows"
+]
+if accessibilityCommands.contains(command) {
+    checkAccessibility()
 }
 
 switch command {

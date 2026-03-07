@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+mkdir -p "$SCRIPT_DIR/bin"
+
 echo "Compiling window-tool..."
 swiftc -O \
   -o "$SCRIPT_DIR/bin/window-tool" \

@@ -6,7 +6,16 @@ A fast macOS CLI for listing, moving, and resizing application windows using the
 
 - macOS
 - Swift compiler (`swiftc`) — included with Xcode or Xcode Command Line Tools
-- Accessibility permissions for the calling terminal app (System Settings > Privacy & Security > Accessibility)
+
+### Accessibility permissions
+
+window-tool uses the macOS Accessibility API, which requires explicit user consent. You must grant Accessibility access to the terminal app you run window-tool from (e.g., iTerm2, Terminal.app):
+
+1. Open **System Settings > Privacy & Security > Accessibility**
+2. Click the **+** button and add your terminal application
+3. If it's already listed, toggle it off and on again
+
+Without this, commands that interact with windows (`list`, `move`, `focus`, etc.) will fail with an error.
 
 ## Building
 
