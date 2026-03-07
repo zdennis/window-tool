@@ -1,4 +1,16 @@
 import Cocoa
+import Foundation
+
+// MARK: - JSON Output
+
+var jsonOutput = false
+
+func printJSON(_ value: Any) {
+    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+       let str = String(data: data, encoding: .utf8) {
+        print(str)
+    }
+}
 
 // MARK: - Accessibility Helpers
 
@@ -78,17 +90,34 @@ func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
 /// Output columns: index, frame origin, frame size, visible origin, visible size, and flags ([main], [mouse]).
 func screensCommand() {
     let mouseLocation = NSEvent.mouseLocation
-    for (index, screen) in NSScreen.screens.enumerated() {
-        let frame = screen.frame
-        let visible = screen.visibleFrame
-        // NSScreen uses bottom-left origin, convert to top-left for consistency
-        let isMain = (screen == NSScreen.main)
-        let containsMouse = frame.contains(mouseLocation)
-        var flags: [String] = []
-        if isMain { flags.append("main") }
-        if containsMouse { flags.append("mouse") }
-        let flagStr = flags.isEmpty ? "" : " [\(flags.joined(separator: ","))]"
-        print("\(index)\t\(Int(frame.origin.x)),\(Int(frame.origin.y))\t\(Int(frame.width))x\(Int(frame.height))\t\(Int(visible.origin.x)),\(Int(visible.origin.y))\t\(Int(visible.width))x\(Int(visible.height))\(flagStr)")
+    if jsonOutput {
+        var items: [[String: Any]] = []
+        for (index, screen) in NSScreen.screens.enumerated() {
+            let frame = screen.frame
+            let visible = screen.visibleFrame
+            items.append([
+                "index": index,
+                "frame_x": Int(frame.origin.x), "frame_y": Int(frame.origin.y),
+                "frame_width": Int(frame.width), "frame_height": Int(frame.height),
+                "visible_x": Int(visible.origin.x), "visible_y": Int(visible.origin.y),
+                "visible_width": Int(visible.width), "visible_height": Int(visible.height),
+                "main": screen == NSScreen.main,
+                "mouse": frame.contains(mouseLocation)
+            ])
+        }
+        printJSON(items)
+    } else {
+        for (index, screen) in NSScreen.screens.enumerated() {
+            let frame = screen.frame
+            let visible = screen.visibleFrame
+            let isMain = (screen == NSScreen.main)
+            let containsMouse = frame.contains(mouseLocation)
+            var flags: [String] = []
+            if isMain { flags.append("main") }
+            if containsMouse { flags.append("mouse") }
+            let flagStr = flags.isEmpty ? "" : " [\(flags.joined(separator: ","))]"
+            print("\(index)\t\(Int(frame.origin.x)),\(Int(frame.origin.y))\t\(Int(frame.width))x\(Int(frame.height))\t\(Int(visible.origin.x)),\(Int(visible.origin.y))\t\(Int(visible.width))x\(Int(visible.height))\(flagStr)")
+        }
     }
 }
 
@@ -103,7 +132,12 @@ func activeScreenCommand() {
     // Output: x,y width height visible_x,visible_y visible_width visible_height
     // NSScreen y-axis is bottom-up; convert visible frame to top-left origin for window positioning
     let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
-    print("\(Int(frame.origin.x))\t\(Int(topLeftY))\t\(Int(visible.width))\t\(Int(visible.height))")
+    if jsonOutput {
+        printJSON(["x": Int(frame.origin.x), "y": Int(topLeftY),
+                   "width": Int(visible.width), "height": Int(visible.height)])
+    } else {
+        print("\(Int(frame.origin.x))\t\(Int(topLeftY))\t\(Int(visible.width))\t\(Int(visible.height))")
+    }
 }
 
 // MARK: - Accessibility Check
@@ -129,8 +163,16 @@ func listCommand(bundleId: String) {
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    for w in windows {
-        print("\(w.id)\t\(Int(w.position.x)),\(Int(w.position.y))\t\(Int(w.size.width))x\(Int(w.size.height))\t\(w.title)")
+    if jsonOutput {
+        let items = windows.map { w in
+            ["index": w.id, "x": Int(w.position.x), "y": Int(w.position.y),
+             "width": Int(w.size.width), "height": Int(w.size.height), "title": w.title] as [String: Any]
+        }
+        printJSON(items)
+    } else {
+        for w in windows {
+            print("\(w.id)\t\(Int(w.position.x)),\(Int(w.position.y))\t\(Int(w.size.width))x\(Int(w.size.height))\t\(w.title)")
+        }
     }
 }
 
@@ -196,15 +238,22 @@ func listOpenWindowsCommand() {
         }
     }
     entries.sort(by: { $0.name.lowercased() < $1.name.lowercased() })
-    let maxName = max(entries.map { $0.name.count }.max() ?? 0, 4) // "APP"
-    let maxBundleId = max(entries.map { $0.bundleId.count }.max() ?? 0, 9) // "BUNDLE ID"
-    let headerName = "APP".padding(toLength: maxName, withPad: " ", startingAt: 0)
-    let headerBundleId = "BUNDLE ID".padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
-    print("\(headerName)  \(headerBundleId)  WINDOW TITLE")
-    for entry in entries {
-        let paddedName = entry.name.padding(toLength: maxName, withPad: " ", startingAt: 0)
-        let paddedBundleId = entry.bundleId.padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
-        print("\(paddedName)  \(paddedBundleId)  \(entry.title)")
+    if jsonOutput {
+        let items = entries.map { e in
+            ["app": e.name, "bundle_id": e.bundleId, "title": e.title]
+        }
+        printJSON(items)
+    } else {
+        let maxName = max(entries.map { $0.name.count }.max() ?? 0, 4)
+        let maxBundleId = max(entries.map { $0.bundleId.count }.max() ?? 0, 9)
+        let headerName = "APP".padding(toLength: maxName, withPad: " ", startingAt: 0)
+        let headerBundleId = "BUNDLE ID".padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
+        print("\(headerName)  \(headerBundleId)  WINDOW TITLE")
+        for entry in entries {
+            let paddedName = entry.name.padding(toLength: maxName, withPad: " ", startingAt: 0)
+            let paddedBundleId = entry.bundleId.padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
+            print("\(paddedName)  \(paddedBundleId)  \(entry.title)")
+        }
     }
 }
 
@@ -536,22 +585,29 @@ func infoCommand(bundleId: String, index: Int) {
     AXUIElementCopyAttributeValue(w.element, "AXFullScreen" as CFString, &fullscreenRef)
     let fullscreen = (fullscreenRef as? Bool) ?? false
 
-    print("index:\t\(w.id)")
-    print("title:\t\(w.title)")
-    print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")
-    print("size:\t\(Int(w.size.width))x\(Int(w.size.height))")
-    print("minimized:\t\(minimized)")
-    print("fullscreen:\t\(fullscreen)")
+    if jsonOutput {
+        printJSON(["index": w.id, "title": w.title,
+                   "x": Int(w.position.x), "y": Int(w.position.y),
+                   "width": Int(w.size.width), "height": Int(w.size.height),
+                   "minimized": minimized, "fullscreen": fullscreen] as [String: Any])
+    } else {
+        print("index:\t\(w.id)")
+        print("title:\t\(w.title)")
+        print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")
+        print("size:\t\(Int(w.size.width))x\(Int(w.size.height))")
+        print("minimized:\t\(minimized)")
+        print("fullscreen:\t\(fullscreen)")
+    }
 }
 
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
-        print("0")
+        if jsonOutput { printJSON(["count": 0]) } else { print("0") }
         return
     }
     let windows = getWindows(appElement: app)
-    print("\(windows.count)")
+    if jsonOutput { printJSON(["count": windows.count]) } else { print("\(windows.count)") }
 }
 
 // MARK: - Main
@@ -590,6 +646,7 @@ func usage() {
 
     Options:
       --app <bundle-id>   Target application (default: com.googlecode.iterm2)
+      --json              Output in JSON format
 
     Examples:
       window-tool list
@@ -601,6 +658,12 @@ func usage() {
 
 var args = Array(CommandLine.arguments.dropFirst())
 var bundleId = "com.googlecode.iterm2"
+
+// Parse --json flag
+if let jsonIdx = args.firstIndex(of: "--json") {
+    jsonOutput = true
+    args.remove(at: jsonIdx)
+}
 
 // Parse --app flag
 if let appIdx = args.firstIndex(of: "--app"), appIdx + 1 < args.count {
