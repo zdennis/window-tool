@@ -609,6 +609,141 @@ func highlightCommand(bundleId: String, selector: WindowSelector, color: NSColor
     app.run()
 }
 
+// MARK: - Dim Overlay
+
+let dimPIDFile = "/tmp/window-tool-dim.pid"
+
+func parseDimFlags(_ args: [String]) throws -> (opacity: Double, duration: Double) {
+    var opacity: Double = 0.5
+    var duration: Double = 0
+    if let idx = args.firstIndex(of: "--opacity") {
+        guard idx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--opacity", label: "flag (requires a value)")
+        }
+        opacity = try parseDouble(args[idx + 1], label: "opacity")
+    }
+    if let idx = args.firstIndex(of: "--duration") {
+        guard idx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
+        }
+        duration = try parseDouble(args[idx + 1], label: "duration")
+    }
+    return (opacity, duration)
+}
+
+class DimOverlayView: NSView {
+    var cutoutRect: NSRect? = nil
+    var dimColor: NSColor = NSColor.black.withAlphaComponent(0.5)
+
+    override func draw(_ dirtyRect: NSRect) {
+        dimColor.setFill()
+        bounds.fill()
+        if let cutout = cutoutRect {
+            NSColor.clear.setFill()
+            cutout.fill(using: .copy)
+        }
+    }
+}
+
+func killExistingDim() {
+    guard FileManager.default.fileExists(atPath: dimPIDFile),
+          let pidStr = try? String(contentsOfFile: dimPIDFile, encoding: .utf8),
+          let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        return
+    }
+    kill(pid, SIGTERM)
+    try? FileManager.default.removeItem(atPath: dimPIDFile)
+}
+
+func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, duration: Double) throws {
+    guard opacity >= 0.0 && opacity <= 1.0 else {
+        throw WindowToolError.invalidArgument(value: "\(opacity)", label: "opacity (must be between 0.0 and 1.0)")
+    }
+
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+
+    killExistingDim()
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    let targetCocoaY = mainScreenHeight - window.position.y - window.size.height
+    let targetRect = NSRect(x: window.position.x, y: targetCocoaY,
+                            width: window.size.width, height: window.size.height)
+
+    var overlays: [NSWindow] = []
+
+    for screen in NSScreen.screens {
+        let frame = screen.frame
+        let overlay = NSWindow(contentRect: frame,
+                               styleMask: .borderless,
+                               backing: .buffered,
+                               defer: false)
+        overlay.isOpaque = false
+        overlay.backgroundColor = .clear
+        overlay.level = .floating
+        overlay.ignoresMouseEvents = true
+        overlay.hasShadow = false
+        overlay.collectionBehavior = [.canJoinAllSpaces, .stationary]
+
+        let view = DimOverlayView(frame: NSRect(origin: .zero, size: frame.size))
+        view.dimColor = NSColor.black.withAlphaComponent(opacity)
+
+        if frame.intersects(targetRect) {
+            let localRect = NSRect(
+                x: targetRect.origin.x - frame.origin.x,
+                y: targetRect.origin.y - frame.origin.y,
+                width: targetRect.width,
+                height: targetRect.height
+            )
+            view.cutoutRect = localRect
+        }
+
+        overlay.contentView = view
+        overlay.orderFrontRegardless()
+        overlays.append(overlay)
+    }
+
+    try "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: dimPIDFile, atomically: true, encoding: .utf8)
+
+    let cleanupPID: @convention(c) (Int32) -> Void = { _ in
+        try? FileManager.default.removeItem(atPath: dimPIDFile)
+        exit(0)
+    }
+    signal(SIGTERM, cleanupPID)
+    signal(SIGINT, cleanupPID)
+
+    if duration > 0 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            for overlay in overlays { overlay.close() }
+            try? FileManager.default.removeItem(atPath: dimPIDFile)
+            app.stop(nil)
+            let dummyEvent = NSEvent.otherEvent(with: .applicationDefined,
+                                                location: .zero, modifierFlags: [],
+                                                timestamp: 0, windowNumber: 0,
+                                                context: nil, subtype: 0,
+                                                data1: 0, data2: 0)!
+            app.postEvent(dummyEvent, atStart: true)
+        }
+    }
+
+    app.run()
+}
+
+func undimCommand() throws {
+    guard FileManager.default.fileExists(atPath: dimPIDFile),
+          let pidStr = try? String(contentsOfFile: dimPIDFile, encoding: .utf8),
+          let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        throw WindowToolError.invalidArgument(value: "none", label: "active dim overlay (run 'dim' first)")
+    }
+    let result = kill(pid, SIGTERM)
+    try? FileManager.default.removeItem(atPath: dimPIDFile)
+    if result != 0 {
+        throw WindowToolError.invalidArgument(value: "\(pid)", label: "dim process (process not found)")
+    }
+}
+
 /// Resizes window(s) without changing position.
 func resizeCommand(bundleId: String, selector: WindowSelector, width: CGFloat, height: CGFloat) throws {
     let windows = try resolveAllWindows(bundleId: bundleId, selector: selector)
@@ -977,6 +1112,8 @@ func usage() {
       active-screen                            Print active screen bounds (x, y, width, height)
       columnize <w> <w> [<w>...] [--gap N]     Arrange windows side-by-side in columns
       count                                    Print number of windows
+      dim <window> [--opacity 0.5] [--duration 0]  Dim everything except a window
+      dim-by-title <pattern> [--opacity 0.5] [--duration 0]  Dim by title match
       flash <window> [--color green] [--count 1]  Flash a colored overlay on a window
       flash-by-title <pattern> [--color green] [--count 1]  Flash overlay by title match
       focus <window>                           Bring window to front
@@ -1007,6 +1144,7 @@ func usage() {
       snap <window> <position>                 Snap window to screen region
       snap-by-title <pattern> <position>       Snap window to screen region by title
       stack [offset]                           Cascade windows with offset (default: 30)
+      undim                                    Remove active dim overlay
       unfullscreen <window>                     Exit macOS fullscreen mode
       unfullscreen-by-title <pattern>          Exit fullscreen by title match
       watch [interval]                         Watch for window changes (default: 1.0s)
@@ -1080,10 +1218,11 @@ let accessibilityCommands: Set<String> = [
     "focus", "focus-by-title", "flash", "flash-by-title",
     "shake", "shake-by-title",
     "highlight", "highlight-by-title",
+    "dim", "dim-by-title",
     "list-open-windows"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["screens", "active-screen", "list-open-windows", "help", "--help", "-h"]
+let appIndependentCommands: Set<String> = ["screens", "active-screen", "list-open-windows", "undim", "help", "--help", "-h"]
 
 do {
     if accessibilityCommands.contains(command) {
@@ -1331,6 +1470,23 @@ do {
         }
         let hlFlags = try parseHighlightFlags(Array(args.dropFirst()))
         try highlightCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), color: hlFlags.color, duration: hlFlags.duration)
+    case "dim":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool dim <window> [--opacity 0.5] [--duration 0]\n", stderr)
+            exit(1)
+        }
+        let selector = try parseWindowSelector(args[1])
+        let dimFlags = try parseDimFlags(Array(args.dropFirst()))
+        try dimCommand(bundleId: config.bundleId, selector: selector, opacity: dimFlags.opacity, duration: dimFlags.duration)
+    case "dim-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool dim-by-title <pattern> [--opacity 0.5] [--duration 0]\n", stderr)
+            exit(1)
+        }
+        let dimFlags = try parseDimFlags(Array(args.dropFirst()))
+        try dimCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), opacity: dimFlags.opacity, duration: dimFlags.duration)
+    case "undim":
+        try undimCommand()
     case "list-open-windows":
         listOpenWindowsCommand()
     case "screens":
