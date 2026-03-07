@@ -25,6 +25,7 @@ func printJSON(_ value: Any) {
 
 enum WindowToolError: LocalizedError {
     case appNotFound(String)
+    case ambiguousApp(query: String, matches: [(name: String, bundleId: String)])
     case windowIndexOutOfRange(index: Int, count: Int)
     case noWindowMatchingTitle(String)
     case screenIndexOutOfRange(index: Int, count: Int)
@@ -35,6 +36,9 @@ enum WindowToolError: LocalizedError {
         switch self {
         case .appNotFound(let id):
             return "Application not found: \(id)"
+        case .ambiguousApp(let query, let matches):
+            let list = matches.map { "  \($0.name) (\($0.bundleId))" }.joined(separator: "\n")
+            return "Multiple apps match '\(query)':\n\(list)\nUse a more specific name or the full bundle ID."
         case .windowIndexOutOfRange(let index, let count):
             return "Window index \(index) out of range\(count == 0 ? " (no windows)" : " (0..\(count - 1))")"
         case .noWindowMatchingTitle(let pattern):
@@ -66,6 +70,37 @@ func parseDouble(_ s: String, label: String) throws -> Double {
 }
 
 // MARK: - Accessibility Helpers
+
+/// Resolves an app identifier to a bundle ID.
+/// If the identifier contains a dot, it's treated as an exact bundle ID.
+/// Otherwise, it's matched case-insensitively against app names and bundle IDs of running apps.
+func resolveAppIdentifier(_ identifier: String) throws -> String {
+    let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+
+    // Try exact bundle ID match first
+    if apps.contains(where: { $0.bundleIdentifier == identifier }) {
+        return identifier
+    }
+
+    // Fuzzy match against app names and bundle IDs
+    let query = identifier.lowercased()
+    var matches: [(name: String, bundleId: String)] = []
+    var seen = Set<String>()
+    for app in apps {
+        guard let bundleId = app.bundleIdentifier, !seen.contains(bundleId) else { continue }
+        seen.insert(bundleId)
+        let name = app.localizedName ?? ""
+        if name.lowercased().contains(query) || bundleId.lowercased().contains(query) {
+            matches.append((name: name, bundleId: bundleId))
+        }
+    }
+    if matches.count == 1 {
+        return matches[0].bundleId
+    } else if matches.count > 1 {
+        throw WindowToolError.ambiguousApp(query: identifier, matches: matches)
+    }
+    throw WindowToolError.appNotFound(identifier)
+}
 
 /// Returns the AXUIElement for a running application matching the given bundle identifier.
 /// Returns nil if no running application with that bundle ID is found.
@@ -685,7 +720,7 @@ func countCommand(bundleId: String) {
 /// Prints the CLI usage/help text.
 func usage() {
     let help = """
-    Usage: window-tool [--app <bundle-id>] <command> [args...]
+    Usage: window-tool [--app <name-or-id>] <command> [args...]
 
     Commands:
       active-screen                            Print active screen bounds (x, y, width, height)
@@ -726,12 +761,14 @@ func usage() {
       bottom-left, bottom-right, center, maximize
 
     Options:
-      --app <bundle-id>   Target application (default: com.googlecode.iterm2)
+      --app <name-or-id>  Target application by name or bundle ID (default: com.googlecode.iterm2)
       --json              Output in JSON format
       --version, -v       Print version and exit
 
     Examples:
       window-tool list
+      window-tool --app Safari list
+      window-tool --app iTerm columnize 0 1 2
       window-tool move 0 100 50 1200 900
       window-tool move-by-title "my-notes" 0 0 1400 1000
     """
@@ -749,7 +786,7 @@ if let jsonIdx = args.firstIndex(of: "--json") {
 // Parse --app flag
 if let appIdx = args.firstIndex(of: "--app") {
     guard appIdx + 1 < args.count else {
-        fputs("Error: --app requires a bundle identifier\n", stderr)
+        fputs("Error: --app requires an app name or bundle identifier\n", stderr)
         exit(1)
     }
     config.bundleId = args[appIdx + 1]
@@ -780,9 +817,16 @@ let accessibilityCommands: Set<String> = [
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
+// Commands that don't use --app (they enumerate all apps or don't need one)
+let appIndependentCommands: Set<String> = ["screens", "active-screen", "list-open-windows", "help", "--help", "-h"]
+
 do {
     if accessibilityCommands.contains(command) {
         try checkAccessibility()
+    }
+
+    if !appIndependentCommands.contains(command) {
+        config.bundleId = try resolveAppIdentifier(config.bundleId)
     }
 
     switch command {
