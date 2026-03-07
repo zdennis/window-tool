@@ -12,6 +12,24 @@ func printJSON(_ value: Any) {
     }
 }
 
+// MARK: - Argument Parsing Helpers
+
+func parseInt(_ s: String, label: String) -> Int {
+    guard let v = Int(s) else {
+        fputs("Error: '\(s)' is not a valid \(label)\n", stderr)
+        exit(1)
+    }
+    return v
+}
+
+func parseDouble(_ s: String, label: String) -> Double {
+    guard let v = Double(s) else {
+        fputs("Error: '\(s)' is not a valid \(label)\n", stderr)
+        exit(1)
+    }
+    return v
+}
+
 // MARK: - Accessibility Helpers
 
 /// Returns the AXUIElement for a running application matching the given bundle identifier.
@@ -823,7 +841,7 @@ case "info":
         fputs("Usage: window-tool info <index>\n", stderr)
         exit(1)
     }
-    infoCommand(bundleId: bundleId, index: Int(args[1])!)
+    infoCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"))
 case "count":
     countCommand(bundleId: bundleId)
 case "move":
@@ -831,14 +849,14 @@ case "move":
         fputs("Usage: window-tool move <index> <x> <y> [<width> <height>]\n", stderr)
         exit(1)
     }
-    let index = Int(args[1])!
-    let x = CGFloat(Double(args[2])!)
-    let y = CGFloat(Double(args[3])!)
+    let index = parseInt(args[1], label: "index")
+    let x = CGFloat(parseDouble(args[2], label: "x"))
+    let y = CGFloat(parseDouble(args[3], label: "y"))
     var width: CGFloat? = nil
     var height: CGFloat? = nil
     if args.count >= 6 {
-        width = CGFloat(Double(args[4])!)
-        height = CGFloat(Double(args[5])!)
+        width = CGFloat(parseDouble(args[4], label: "width"))
+        height = CGFloat(parseDouble(args[5], label: "height"))
     }
     moveCommand(bundleId: bundleId, index: index, x: x, y: y, width: width, height: height)
 case "move-by-title":
@@ -847,13 +865,13 @@ case "move-by-title":
         exit(1)
     }
     let pattern = args[1]
-    let x = CGFloat(Double(args[2])!)
-    let y = CGFloat(Double(args[3])!)
+    let x = CGFloat(parseDouble(args[2], label: "x"))
+    let y = CGFloat(parseDouble(args[3], label: "y"))
     var width: CGFloat? = nil
     var height: CGFloat? = nil
     if args.count >= 6 {
-        width = CGFloat(Double(args[4])!)
-        height = CGFloat(Double(args[5])!)
+        width = CGFloat(parseDouble(args[4], label: "width"))
+        height = CGFloat(parseDouble(args[5], label: "height"))
     }
     moveByTitleCommand(bundleId: bundleId, titlePattern: pattern, x: x, y: y, width: width, height: height)
 case "resize":
@@ -861,22 +879,22 @@ case "resize":
         fputs("Usage: window-tool resize <index> <width> <height>\n", stderr)
         exit(1)
     }
-    let index = Int(args[1])!
-    let width = CGFloat(Double(args[2])!)
-    let height = CGFloat(Double(args[3])!)
+    let index = parseInt(args[1], label: "index")
+    let width = CGFloat(parseDouble(args[2], label: "width"))
+    let height = CGFloat(parseDouble(args[3], label: "height"))
     resizeCommand(bundleId: bundleId, index: index, width: width, height: height)
 case "resize-by-title":
     guard args.count >= 4 else {
         fputs("Usage: window-tool resize-by-title <pattern> <width> <height>\n", stderr)
         exit(1)
     }
-    resizeByTitleCommand(bundleId: bundleId, titlePattern: args[1], width: CGFloat(Double(args[2])!), height: CGFloat(Double(args[3])!))
+    resizeByTitleCommand(bundleId: bundleId, titlePattern: args[1], width: CGFloat(parseDouble(args[2], label: "width")), height: CGFloat(parseDouble(args[3], label: "height")))
 case "snap":
     guard args.count >= 3 else {
         fputs("Usage: window-tool snap <index> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
         exit(1)
     }
-    snapCommand(bundleId: bundleId, index: Int(args[1])!, position: args[2])
+    snapCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"), position: args[2])
 case "snap-by-title":
     guard args.count >= 3 else {
         fputs("Usage: window-tool snap-by-title <pattern> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
@@ -888,19 +906,19 @@ case "move-to-screen":
         fputs("Usage: window-tool move-to-screen <index> <screen>\n", stderr)
         exit(1)
     }
-    moveToScreenCommand(bundleId: bundleId, windowIndex: Int(args[1])!, screenIndex: Int(args[2])!)
+    moveToScreenCommand(bundleId: bundleId, windowIndex: parseInt(args[1], label: "index"), screenIndex: parseInt(args[2], label: "screen"))
 case "move-to-screen-by-title":
     guard args.count >= 3 else {
         fputs("Usage: window-tool move-to-screen-by-title <pattern> <screen>\n", stderr)
         exit(1)
     }
-    moveToScreenByTitleCommand(bundleId: bundleId, titlePattern: args[1], screenIndex: Int(args[2])!)
+    moveToScreenByTitleCommand(bundleId: bundleId, titlePattern: args[1], screenIndex: parseInt(args[2], label: "screen"))
 case "minimize":
     guard args.count >= 2 else {
         fputs("Usage: window-tool minimize <index>\n", stderr)
         exit(1)
     }
-    minimizeCommand(bundleId: bundleId, index: Int(args[1])!)
+    minimizeCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"))
 case "minimize-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool minimize-by-title <pattern>\n", stderr)
@@ -922,17 +940,17 @@ case "restore-layout":
     }
     restoreLayoutCommand(filePath: args[1])
 case "stack":
-    let offset = args.count >= 2 ? Int(args[1])! : 30
+    let offset = args.count >= 2 ? parseInt(args[1], label: "offset") : 30
     stackCommand(bundleId: bundleId, offsetStep: offset)
 case "watch":
-    let interval = args.count >= 2 ? Double(args[1])! : 1.0
+    let interval = args.count >= 2 ? parseDouble(args[1], label: "interval") : 1.0
     watchCommand(bundleId: bundleId, interval: interval)
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
         exit(1)
     }
-    focusCommand(bundleId: bundleId, index: Int(args[1])!)
+    focusCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"))
 case "focus-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus-by-title <pattern>\n", stderr)
@@ -944,10 +962,10 @@ case "shake":
         fputs("Usage: window-tool shake <index> [offset] [count] [delay]\n", stderr)
         exit(1)
     }
-    let index = Int(args[1])!
-    let offset = args.count >= 3 ? Int(args[2])! : 12
-    let count = args.count >= 4 ? Int(args[3])! : 6
-    let shakeDelay = args.count >= 5 ? Double(args[4])! : 0.04
+    let index = parseInt(args[1], label: "index")
+    let offset = args.count >= 3 ? parseInt(args[2], label: "offset") : 12
+    let count = args.count >= 4 ? parseInt(args[3], label: "count") : 6
+    let shakeDelay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
     shakeCommand(bundleId: bundleId, index: index, offset: offset, count: count, delay: shakeDelay)
 case "shake-by-title":
     guard args.count >= 2 else {
@@ -955,9 +973,9 @@ case "shake-by-title":
         exit(1)
     }
     let pattern = args[1]
-    let offset = args.count >= 3 ? Int(args[2])! : 12
-    let count = args.count >= 4 ? Int(args[3])! : 6
-    let shakeDelay = args.count >= 5 ? Double(args[4])! : 0.04
+    let offset = args.count >= 3 ? parseInt(args[2], label: "offset") : 12
+    let count = args.count >= 4 ? parseInt(args[3], label: "count") : 6
+    let shakeDelay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
     shakeByTitleCommand(bundleId: bundleId, titlePattern: pattern, offset: offset, count: count, delay: shakeDelay)
 case "list-open-windows":
     listOpenWindowsCommand()
