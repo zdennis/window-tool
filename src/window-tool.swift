@@ -430,6 +430,19 @@ func snapCommand(bundleId: String, selector: WindowSelector, position: SnapPosit
     }
 }
 
+/// Maximizes window(s) to fill the visible screen area.
+func maximizeCommand(bundleId: String, selector: WindowSelector) throws {
+    let windows = try resolveAllWindows(bundleId: bundleId, selector: selector)
+    for window in windows {
+        let bounds = screenBoundsForWindow(window)
+        moveWindow(window.element, x: bounds.x, y: bounds.y)
+        resizeWindow(window.element, width: bounds.width, height: bounds.height)
+    }
+    if case .byTitle(let pattern) = selector {
+        print("Maximized \(windows.count) window(s) matching '\(pattern)'")
+    }
+}
+
 /// Moves a window to a different screen, placing it at the top-left of the visible area.
 func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex: Int) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
@@ -639,6 +652,8 @@ func usage() {
       info <index>                             Show detailed info for a window
       list                                     List all windows with index, position, size, and title
       list-open-windows                        List apps with open windows
+      maximize <index>                         Maximize window to fill screen
+      maximize-by-title <pattern>              Maximize windows matching title
       minimize <index>                         Minimize a window by index
       minimize-by-title <pattern>              Minimize a window by title match
       move <index> <x> <y> [<w> <h>]           Move/resize window by index
@@ -709,6 +724,7 @@ let accessibilityCommands: Set<String> = [
     "resize", "resize-by-title",
     "snap", "snap-by-title",
     "move-to-screen", "move-to-screen-by-title",
+    "maximize", "maximize-by-title",
     "minimize", "minimize-by-title", "restore",
     "save-layout", "restore-layout", "stack", "watch",
     "focus", "focus-by-title", "shake", "shake-by-title",
@@ -807,6 +823,18 @@ do {
             exit(1)
         }
         try moveToScreenCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), screenIndex: try parseInt(args[2], label: "screen"))
+    case "maximize":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool maximize <index>\n", stderr)
+            exit(1)
+        }
+        try maximizeCommand(bundleId: config.bundleId, selector: .byIndex(try parseInt(args[1], label: "index")))
+    case "maximize-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool maximize-by-title <pattern>\n", stderr)
+            exit(1)
+        }
+        try maximizeCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "minimize":
         guard args.count >= 2 else {
             fputs("Usage: window-tool minimize <index>\n", stderr)
