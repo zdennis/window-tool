@@ -71,6 +71,7 @@ func getWindows(appElement: AXUIElement) -> [WindowInfo] {
         AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef)
         var position = CGPoint.zero
         if let posRef = posRef {
+            // AXValue is a CFTypeRef subtype; the AX API guarantees this cast for position attributes
             AXValueGetValue(posRef as! AXValue, .cgPoint, &position)
         }
 
@@ -202,8 +203,8 @@ func moveCommand(bundleId: String, index: Int, x: CGFloat, y: CGFloat, width: CG
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard index >= 0 && index < windows.count else {
-        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(index) else {
+        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     let window = windows[index]
@@ -283,8 +284,8 @@ func focusCommand(bundleId: String, index: Int) {
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard index >= 0 && index < windows.count else {
-        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(index) else {
+        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     let window = windows[index]
@@ -326,8 +327,8 @@ func shakeCommand(bundleId: String, index: Int, offset: Int, count: Int, delay s
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard index >= 0 && index < windows.count else {
-        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(index) else {
+        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     let window = windows[index]
@@ -375,8 +376,8 @@ func resizeCommand(bundleId: String, index: Int, width: CGFloat, height: CGFloat
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard index >= 0 && index < windows.count else {
-        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(index) else {
+        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     resizeWindow(windows[index].element, width: width, height: height)
@@ -423,8 +424,8 @@ func snapCommand(bundleId: String, index: Int, position: String) {
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard index >= 0 && index < windows.count else {
-        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(index) else {
+        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     let window = windows[index]
@@ -495,8 +496,8 @@ func moveToScreenCommand(bundleId: String, windowIndex: Int, screenIndex: Int) {
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard windowIndex >= 0 && windowIndex < windows.count else {
-        fputs("Error: Window index \(windowIndex) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(windowIndex) else {
+        fputs("Error: Window index \(windowIndex) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     guard screenIndex >= 0 && screenIndex < NSScreen.screens.count else {
@@ -540,8 +541,8 @@ func minimizeCommand(bundleId: String, index: Int) {
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard index >= 0 && index < windows.count else {
-        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(index) else {
+        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     AXUIElementSetAttributeValue(windows[index].element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
@@ -589,8 +590,8 @@ func infoCommand(bundleId: String, index: Int) {
         exit(1)
     }
     let windows = getWindows(appElement: app)
-    guard index >= 0 && index < windows.count else {
-        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+    guard windows.indices.contains(index) else {
+        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
         exit(1)
     }
     let w = windows[index]
@@ -808,7 +809,11 @@ if let jsonIdx = args.firstIndex(of: "--json") {
 }
 
 // Parse --app flag
-if let appIdx = args.firstIndex(of: "--app"), appIdx + 1 < args.count {
+if let appIdx = args.firstIndex(of: "--app") {
+    guard appIdx + 1 < args.count else {
+        fputs("Error: --app requires a bundle identifier\n", stderr)
+        exit(1)
+    }
     bundleId = args[appIdx + 1]
     args.removeSubrange(appIdx...appIdx+1)
 }
