@@ -1020,7 +1020,7 @@ func usage() {
       bottom-left, bottom-right, center, maximize
 
     Colors:
-      red, green, blue, yellow, orange, purple, white, cyan, magenta
+      red, green, blue, yellow, orange, purple, white, cyan, magenta, random
 
     Options:
       --app <name-or-id>  Target application by name or bundle ID (default: com.googlecode.iterm2)
