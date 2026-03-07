@@ -639,6 +639,37 @@ func watchCommand(bundleId: String, interval: Double) throws {
     }
 }
 
+/// Arranges windows side-by-side in non-overlapping columns and brings them to the front.
+func columnizeCommand(bundleId: String, indices: [Int], gap: Int) throws {
+    let app = try requireApp(bundleId)
+    let allWindows = getWindows(appElement: app)
+
+    var selected: [WindowInfo] = []
+    for index in indices {
+        guard allWindows.indices.contains(index) else {
+            throw WindowToolError.windowIndexOutOfRange(index: index, count: allWindows.count)
+        }
+        selected.append(allWindows[index])
+    }
+
+    let bounds = screenBoundsForWindow(selected[0])
+    let count = CGFloat(selected.count)
+    let totalGap = CGFloat(gap) * (count - 1)
+    let colWidth = (bounds.width - totalGap) / count
+
+    let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
+    runningApps.first?.activate()
+
+    for (i, window) in selected.enumerated() {
+        let x = bounds.x + CGFloat(i) * (colWidth + CGFloat(gap))
+        moveWindow(window.element, x: x, y: bounds.y)
+        resizeWindow(window.element, width: colWidth, height: bounds.height)
+        AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
+        AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+    }
+    print("Arranged \(selected.count) window(s) in columns")
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -658,6 +689,7 @@ func usage() {
 
     Commands:
       active-screen                            Print active screen bounds (x, y, width, height)
+      columnize <i> <i> [<i>...] [--gap N]     Arrange windows side-by-side in columns
       count                                    Print number of windows
       focus <index>                            Bring window to front by index
       focus-by-title <pattern>                 Bring window to front by title match
@@ -736,7 +768,7 @@ if command == "--version" || command == "-v" {
 
 // Commands that need Accessibility access
 let accessibilityCommands: Set<String> = [
-    "list", "info", "count", "move", "move-by-title",
+    "list", "info", "count", "columnize", "move", "move-by-title",
     "resize", "resize-by-title",
     "snap", "snap-by-title",
     "move-to-screen", "move-to-screen-by-title",
@@ -762,6 +794,22 @@ do {
             exit(1)
         }
         try infoCommand(bundleId: config.bundleId, index: try parseInt(args[1], label: "index"))
+    case "columnize":
+        guard args.count >= 3 else {
+            fputs("Usage: window-tool columnize <index> <index> [<index>...] [--gap N]\n", stderr)
+            exit(1)
+        }
+        var columnArgs = Array(args.dropFirst())
+        var gap = 10
+        if let gapIdx = columnArgs.firstIndex(of: "--gap") {
+            guard gapIdx + 1 < columnArgs.count else {
+                throw WindowToolError.invalidArgument(value: "--gap", label: "flag (requires a value)")
+            }
+            gap = try parseInt(columnArgs[gapIdx + 1], label: "gap")
+            columnArgs.removeSubrange(gapIdx...gapIdx + 1)
+        }
+        let indices = try columnArgs.map { try parseInt($0, label: "index") }
+        try columnizeCommand(bundleId: config.bundleId, indices: indices, gap: gap)
     case "count":
         countCommand(bundleId: config.bundleId)
     case "move":
