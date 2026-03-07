@@ -231,10 +231,7 @@ func checkAccessibility() {
 /// Lists all windows for the given application.
 /// Output columns (tab-separated): index, position (x,y), size (WxH), title.
 func listCommand(bundleId: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
+    let app = requireApp(bundleId)
     let windows = getWindows(appElement: app)
     if jsonOutput {
         let items = windows.map { w in
@@ -249,45 +246,18 @@ func listCommand(bundleId: String) {
     }
 }
 
-/// Moves (and optionally resizes) a window by its index.
-/// If width and height are provided, the window is also resized.
-func moveCommand(bundleId: String, index: Int, x: CGFloat, y: CGFloat, width: CGFloat?, height: CGFloat?) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(index) else {
-        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    let window = windows[index]
-    moveWindow(window.element, x: x, y: y)
-    if let w = width, let h = height {
-        resizeWindow(window.element, width: w, height: h)
-    }
-}
-
-/// Moves (and optionally resizes) all windows whose title contains the given pattern.
-/// Uses substring matching. Prints the number of windows moved.
-func moveByTitleCommand(bundleId: String, titlePattern: String, x: CGFloat, y: CGFloat, width: CGFloat?, height: CGFloat?) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    let matching = windows.filter { $0.title.contains(titlePattern) }
-    if matching.isEmpty {
-        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
-        exit(1)
-    }
-    for window in matching {
+/// Moves (and optionally resizes) window(s).
+func moveCommand(bundleId: String, selector: WindowSelector, x: CGFloat, y: CGFloat, width: CGFloat?, height: CGFloat?) {
+    let windows = resolveAllWindows(bundleId: bundleId, selector: selector)
+    for window in windows {
         moveWindow(window.element, x: x, y: y)
         if let w = width, let h = height {
             resizeWindow(window.element, width: w, height: h)
         }
     }
-    print("Moved \(matching.count) window(s) matching '\(titlePattern)'")
+    if case .byTitle(let pattern) = selector {
+        print("Moved \(windows.count) window(s) matching '\(pattern)'")
+    }
 }
 
 /// Lists all running applications that have at least one open window.
@@ -330,129 +300,39 @@ func listOpenWindowsCommand() {
     }
 }
 
-/// Brings a window to the front by its index.
-/// Activates the application and raises the specific window.
-func focusCommand(bundleId: String, index: Int) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(index) else {
-        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    let window = windows[index]
-    // Bring app to front
-    let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
-    runningApps.first?.activate()
-    // Raise the specific window
-    AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
-    AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
-}
-
-/// Brings the first window whose title contains the given pattern to the front.
-/// Activates the application and raises the matching window.
-func focusByTitleCommand(bundleId: String, titlePattern: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
-        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
-        exit(1)
-    }
+/// Brings a window to the front. Activates the application and raises the window.
+func focusCommand(bundleId: String, selector: WindowSelector) {
+    let window = resolveWindow(bundleId: bundleId, selector: selector)
     let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
     runningApps.first?.activate()
     AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
     AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
 }
 
-/// Shakes a window horizontally by its index to draw attention.
-/// - Parameters:
-///   - offset: Horizontal pixel displacement per shake (default: 12).
-///   - count: Number of shake cycles (default: 6).
-///   - shakeDelay: Seconds between each movement (default: 0.04).
-/// The window is restored to its original position after shaking.
-func shakeCommand(bundleId: String, index: Int, offset: Int, count: Int, delay shakeDelay: Double) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(index) else {
-        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    let window = windows[index]
+/// Shakes a window horizontally to draw attention, then restores its position.
+func shakeCommand(bundleId: String, selector: WindowSelector, offset: Int, count: Int, delay: Double) {
+    let window = resolveWindow(bundleId: bundleId, selector: selector)
     let originalX = window.position.x
     let originalY = window.position.y
 
     for _ in 0..<count {
         moveWindow(window.element, x: originalX + CGFloat(offset), y: originalY)
-        Thread.sleep(forTimeInterval: shakeDelay)
+        Thread.sleep(forTimeInterval: delay)
         moveWindow(window.element, x: originalX - CGFloat(offset), y: originalY)
-        Thread.sleep(forTimeInterval: shakeDelay)
-    }
-    // Restore original position
-    moveWindow(window.element, x: originalX, y: originalY)
-}
-
-/// Shakes the first window whose title contains the given pattern.
-/// Same behavior as `shakeCommand` but targets by title substring match.
-func shakeByTitleCommand(bundleId: String, titlePattern: String, offset: Int, count: Int, delay shakeDelay: Double) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
-        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
-        exit(1)
-    }
-    let originalX = window.position.x
-    let originalY = window.position.y
-
-    for _ in 0..<count {
-        moveWindow(window.element, x: originalX + CGFloat(offset), y: originalY)
-        Thread.sleep(forTimeInterval: shakeDelay)
-        moveWindow(window.element, x: originalX - CGFloat(offset), y: originalY)
-        Thread.sleep(forTimeInterval: shakeDelay)
+        Thread.sleep(forTimeInterval: delay)
     }
     moveWindow(window.element, x: originalX, y: originalY)
 }
 
-/// Resizes a window by its index without changing its position.
-func resizeCommand(bundleId: String, index: Int, width: CGFloat, height: CGFloat) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(index) else {
-        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    resizeWindow(windows[index].element, width: width, height: height)
-}
-
-/// Resizes all windows whose title contains the given pattern without changing their position.
-func resizeByTitleCommand(bundleId: String, titlePattern: String, width: CGFloat, height: CGFloat) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    let matching = windows.filter { $0.title.contains(titlePattern) }
-    if matching.isEmpty {
-        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
-        exit(1)
-    }
-    for window in matching {
+/// Resizes window(s) without changing position.
+func resizeCommand(bundleId: String, selector: WindowSelector, width: CGFloat, height: CGFloat) {
+    let windows = resolveAllWindows(bundleId: bundleId, selector: selector)
+    for window in windows {
         resizeWindow(window.element, width: width, height: height)
     }
-    print("Resized \(matching.count) window(s) matching '\(titlePattern)'")
+    if case .byTitle(let pattern) = selector {
+        print("Resized \(windows.count) window(s) matching '\(pattern)'")
+    }
 }
 
 /// Returns the visible frame of the screen containing the given window, converted to top-left origin.
@@ -471,32 +351,9 @@ func screenBoundsForWindow(_ window: WindowInfo) -> (x: CGFloat, y: CGFloat, wid
 
 let snapPositions = ["left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right", "center", "maximize"]
 
-/// Snaps a window to a named screen region by index.
-func snapCommand(bundleId: String, index: Int, position: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(index) else {
-        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    let window = windows[index]
-    snapWindow(window, position: position)
-}
-
-/// Snaps the first window matching a title pattern to a named screen region.
-func snapByTitleCommand(bundleId: String, titlePattern: String, position: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
-        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
-        exit(1)
-    }
+/// Snaps a window to a named screen region.
+func snapCommand(bundleId: String, selector: WindowSelector, position: String) {
+    let window = resolveWindow(bundleId: bundleId, selector: selector)
     snapWindow(window, position: position)
 }
 
@@ -543,85 +400,30 @@ func snapWindow(_ window: WindowInfo, position: String) {
     }
 }
 
-/// Moves a window to a different screen by index, preserving its relative position within the visible area.
-func moveToScreenCommand(bundleId: String, windowIndex: Int, screenIndex: Int) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
+/// Moves a window to a different screen, placing it at the top-left of the visible area.
+func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex: Int) {
+    let window = resolveWindow(bundleId: bundleId, selector: selector)
+    let screens = NSScreen.screens
+    guard screens.indices.contains(screenIndex) else {
+        fputs("Error: Screen index \(screenIndex) out of range (0..\(screens.count - 1))\n", stderr)
         exit(1)
     }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(windowIndex) else {
-        fputs("Error: Window index \(windowIndex) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    guard screenIndex >= 0 && screenIndex < NSScreen.screens.count else {
-        fputs("Error: Screen index \(screenIndex) out of range (0..\(NSScreen.screens.count - 1))\n", stderr)
-        exit(1)
-    }
-    let window = windows[windowIndex]
-    let targetScreen = NSScreen.screens[screenIndex]
+    let targetScreen = screens[screenIndex]
     let frame = targetScreen.frame
     let visible = targetScreen.visibleFrame
     let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
     moveWindow(window.element, x: visible.origin.x, y: topLeftY)
 }
 
-/// Moves the first window matching a title pattern to a different screen.
-func moveToScreenByTitleCommand(bundleId: String, titlePattern: String, screenIndex: Int) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
-        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
-        exit(1)
-    }
-    guard screenIndex >= 0 && screenIndex < NSScreen.screens.count else {
-        fputs("Error: Screen index \(screenIndex) out of range (0..\(NSScreen.screens.count - 1))\n", stderr)
-        exit(1)
-    }
-    let targetScreen = NSScreen.screens[screenIndex]
-    let frame = targetScreen.frame
-    let visible = targetScreen.visibleFrame
-    let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
-    moveWindow(window.element, x: visible.origin.x, y: topLeftY)
-}
-
-/// Minimizes a window by its index.
-func minimizeCommand(bundleId: String, index: Int) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(index) else {
-        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    AXUIElementSetAttributeValue(windows[index].element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
-}
-
-/// Minimizes the first window matching a title pattern.
-func minimizeByTitleCommand(bundleId: String, titlePattern: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
-        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
-        exit(1)
-    }
+/// Minimizes a window.
+func minimizeCommand(bundleId: String, selector: WindowSelector) {
+    let window = resolveWindow(bundleId: bundleId, selector: selector)
     AXUIElementSetAttributeValue(window.element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
 }
 
 /// Restores (unminimizes) all minimized windows for the given application.
 func restoreCommand(bundleId: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
+    let app = requireApp(bundleId)
     var windowsRef: CFTypeRef?
     AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
     guard let windows = windowsRef as? [AXUIElement] else { return }
@@ -639,16 +441,7 @@ func restoreCommand(bundleId: String) {
 
 /// Prints detailed info for a single window by index.
 func infoCommand(bundleId: String, index: Int) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
-    let windows = getWindows(appElement: app)
-    guard windows.indices.contains(index) else {
-        fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
-        exit(1)
-    }
-    let w = windows[index]
+    let w = resolveWindow(bundleId: bundleId, selector: .byIndex(index))
 
     var minimizedRef: CFTypeRef?
     AXUIElementCopyAttributeValue(w.element, kAXMinimizedAttribute as CFString, &minimizedRef)
@@ -675,10 +468,7 @@ func infoCommand(bundleId: String, index: Int) {
 
 /// Saves the current window layout for an application to a JSON file.
 func saveLayoutCommand(bundleId: String, filePath: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
+    let app = requireApp(bundleId)
     let windows = getWindows(appElement: app)
     let items = windows.map { w in
         ["index": w.id, "title": w.title,
@@ -711,10 +501,7 @@ func restoreLayoutCommand(filePath: String) {
         fputs("Error: Could not read layout from \(filePath)\n", stderr)
         exit(1)
     }
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
+    let app = requireApp(bundleId)
     let currentWindows = getWindows(appElement: app)
     var restored = 0
     for saved in savedWindows {
@@ -734,10 +521,7 @@ func restoreLayoutCommand(filePath: String) {
 
 /// Cascades all windows for an application, offsetting each by a fixed amount.
 func stackCommand(bundleId: String, offsetStep: Int) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
+    let app = requireApp(bundleId)
     let windows = getWindows(appElement: app)
     if windows.isEmpty { return }
     let s = screenBoundsForWindow(windows[0])
@@ -750,10 +534,7 @@ func stackCommand(bundleId: String, offsetStep: Int) {
 
 /// Watches for window changes and prints updates.
 func watchCommand(bundleId: String, interval: Double) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        fputs("Error: Application not found: \(bundleId)\n", stderr)
-        exit(1)
-    }
+    let app = requireApp(bundleId)
 
     struct WindowState: Equatable {
         let title: String
@@ -797,7 +578,7 @@ func watchCommand(bundleId: String, interval: Double) {
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
         if jsonOutput { printJSON(["count": 0]) } else { print("0") }
-        return
+        return  // count returns 0 for unknown apps rather than erroring
     }
     let windows = getWindows(appElement: app)
     if jsonOutput { printJSON(["count": windows.count]) } else { print("\(windows.count)") }
@@ -917,7 +698,7 @@ case "move":
         width = CGFloat(parseDouble(args[4], label: "width"))
         height = CGFloat(parseDouble(args[5], label: "height"))
     }
-    moveCommand(bundleId: bundleId, index: index, x: x, y: y, width: width, height: height)
+    moveCommand(bundleId: bundleId, selector: .byIndex(index), x: x, y: y, width: width, height: height)
 case "move-by-title":
     guard args.count >= 4 else {
         fputs("Usage: window-tool move-by-title <pattern> <x> <y> [<width> <height>]\n", stderr)
@@ -932,7 +713,7 @@ case "move-by-title":
         width = CGFloat(parseDouble(args[4], label: "width"))
         height = CGFloat(parseDouble(args[5], label: "height"))
     }
-    moveByTitleCommand(bundleId: bundleId, titlePattern: pattern, x: x, y: y, width: width, height: height)
+    moveCommand(bundleId: bundleId, selector: .byTitle(pattern), x: x, y: y, width: width, height: height)
 case "resize":
     guard args.count >= 4 else {
         fputs("Usage: window-tool resize <index> <width> <height>\n", stderr)
@@ -941,49 +722,49 @@ case "resize":
     let index = parseInt(args[1], label: "index")
     let width = CGFloat(parseDouble(args[2], label: "width"))
     let height = CGFloat(parseDouble(args[3], label: "height"))
-    resizeCommand(bundleId: bundleId, index: index, width: width, height: height)
+    resizeCommand(bundleId: bundleId, selector: .byIndex(index), width: width, height: height)
 case "resize-by-title":
     guard args.count >= 4 else {
         fputs("Usage: window-tool resize-by-title <pattern> <width> <height>\n", stderr)
         exit(1)
     }
-    resizeByTitleCommand(bundleId: bundleId, titlePattern: args[1], width: CGFloat(parseDouble(args[2], label: "width")), height: CGFloat(parseDouble(args[3], label: "height")))
+    resizeCommand(bundleId: bundleId, selector: .byTitle(args[1]), width: CGFloat(parseDouble(args[2], label: "width")), height: CGFloat(parseDouble(args[3], label: "height")))
 case "snap":
     guard args.count >= 3 else {
         fputs("Usage: window-tool snap <index> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
         exit(1)
     }
-    snapCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"), position: args[2])
+    snapCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")), position: args[2])
 case "snap-by-title":
     guard args.count >= 3 else {
         fputs("Usage: window-tool snap-by-title <pattern> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
         exit(1)
     }
-    snapByTitleCommand(bundleId: bundleId, titlePattern: args[1], position: args[2])
+    snapCommand(bundleId: bundleId, selector: .byTitle(args[1]), position: args[2])
 case "move-to-screen":
     guard args.count >= 3 else {
         fputs("Usage: window-tool move-to-screen <index> <screen>\n", stderr)
         exit(1)
     }
-    moveToScreenCommand(bundleId: bundleId, windowIndex: parseInt(args[1], label: "index"), screenIndex: parseInt(args[2], label: "screen"))
+    moveToScreenCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")), screenIndex: parseInt(args[2], label: "screen"))
 case "move-to-screen-by-title":
     guard args.count >= 3 else {
         fputs("Usage: window-tool move-to-screen-by-title <pattern> <screen>\n", stderr)
         exit(1)
     }
-    moveToScreenByTitleCommand(bundleId: bundleId, titlePattern: args[1], screenIndex: parseInt(args[2], label: "screen"))
+    moveToScreenCommand(bundleId: bundleId, selector: .byTitle(args[1]), screenIndex: parseInt(args[2], label: "screen"))
 case "minimize":
     guard args.count >= 2 else {
         fputs("Usage: window-tool minimize <index>\n", stderr)
         exit(1)
     }
-    minimizeCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"))
+    minimizeCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")))
 case "minimize-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool minimize-by-title <pattern>\n", stderr)
         exit(1)
     }
-    minimizeByTitleCommand(bundleId: bundleId, titlePattern: args[1])
+    minimizeCommand(bundleId: bundleId, selector: .byTitle(args[1]))
 case "restore":
     restoreCommand(bundleId: bundleId)
 case "save-layout":
@@ -1009,33 +790,33 @@ case "focus":
         fputs("Usage: window-tool focus <index>\n", stderr)
         exit(1)
     }
-    focusCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"))
+    focusCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")))
 case "focus-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus-by-title <pattern>\n", stderr)
         exit(1)
     }
-    focusByTitleCommand(bundleId: bundleId, titlePattern: args[1])
+    focusCommand(bundleId: bundleId, selector: .byTitle(args[1]))
 case "shake":
     guard args.count >= 2 else {
         fputs("Usage: window-tool shake <index> [offset] [count] [delay]\n", stderr)
         exit(1)
     }
-    let index = parseInt(args[1], label: "index")
+    let selector = WindowSelector.byIndex(parseInt(args[1], label: "index"))
     let offset = args.count >= 3 ? parseInt(args[2], label: "offset") : 12
     let count = args.count >= 4 ? parseInt(args[3], label: "count") : 6
-    let shakeDelay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
-    shakeCommand(bundleId: bundleId, index: index, offset: offset, count: count, delay: shakeDelay)
+    let delay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
+    shakeCommand(bundleId: bundleId, selector: selector, offset: offset, count: count, delay: delay)
 case "shake-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool shake-by-title <pattern> [offset] [count] [delay]\n", stderr)
         exit(1)
     }
-    let pattern = args[1]
+    let selector = WindowSelector.byTitle(args[1])
     let offset = args.count >= 3 ? parseInt(args[2], label: "offset") : 12
     let count = args.count >= 4 ? parseInt(args[3], label: "count") : 6
-    let shakeDelay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
-    shakeByTitleCommand(bundleId: bundleId, titlePattern: pattern, offset: offset, count: count, delay: shakeDelay)
+    let delay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
+    shakeCommand(bundleId: bundleId, selector: selector, offset: offset, count: count, delay: delay)
 case "list-open-windows":
     listOpenWindowsCommand()
 case "screens":
