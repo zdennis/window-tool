@@ -515,6 +515,35 @@ func restoreCommand(bundleId: String) {
     print("Restored \(restored) window(s)")
 }
 
+/// Prints detailed info for a single window by index.
+func infoCommand(bundleId: String, index: Int) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard index >= 0 && index < windows.count else {
+        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+        exit(1)
+    }
+    let w = windows[index]
+
+    var minimizedRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(w.element, kAXMinimizedAttribute as CFString, &minimizedRef)
+    let minimized = (minimizedRef as? Bool) ?? false
+
+    var fullscreenRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(w.element, "AXFullScreen" as CFString, &fullscreenRef)
+    let fullscreen = (fullscreenRef as? Bool) ?? false
+
+    print("index:\t\(w.id)")
+    print("title:\t\(w.title)")
+    print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")
+    print("size:\t\(Int(w.size.width))x\(Int(w.size.height))")
+    print("minimized:\t\(minimized)")
+    print("fullscreen:\t\(fullscreen)")
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -534,6 +563,7 @@ func usage() {
 
     Commands:
       list                                     List all windows with index, position, size, and title
+      info <index>                             Show detailed info for a window
       count                                    Print number of windows
       move <index> <x> <y> [<width> <height>]  Move/resize window by index
       move-by-title <pattern> <x> <y> [<width> <height>]  Move/resize windows matching title
@@ -585,7 +615,7 @@ guard let command = args.first else {
 
 // Commands that need Accessibility access
 let accessibilityCommands: Set<String> = [
-    "list", "count", "move", "move-by-title",
+    "list", "info", "count", "move", "move-by-title",
     "resize", "resize-by-title",
     "snap", "snap-by-title",
     "move-to-screen", "move-to-screen-by-title",
@@ -600,6 +630,12 @@ if accessibilityCommands.contains(command) {
 switch command {
 case "list":
     listCommand(bundleId: bundleId)
+case "info":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool info <index>\n", stderr)
+        exit(1)
+    }
+    infoCommand(bundleId: bundleId, index: Int(args[1])!)
 case "count":
     countCommand(bundleId: bundleId)
 case "move":
