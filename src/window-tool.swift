@@ -284,6 +284,7 @@ func screensCommand() {
         }
         printJSON(items)
     } else {
+        print("INDEX\tFRAME_ORIGIN\tFRAME_SIZE\tVISIBLE_ORIGIN\tVISIBLE_SIZE\tFLAGS")
         for (index, screen) in NSScreen.screens.enumerated() {
             let frame = screen.frame
             let visible = screen.visibleFrame
@@ -292,8 +293,8 @@ func screensCommand() {
             var flags: [String] = []
             if isMain { flags.append("main") }
             if containsMouse { flags.append("mouse") }
-            let flagStr = flags.isEmpty ? "" : " [\(flags.joined(separator: ","))]"
-            print("\(index)\t\(Int(frame.origin.x)),\(Int(frame.origin.y))\t\(Int(frame.width))x\(Int(frame.height))\t\(Int(visible.origin.x)),\(Int(visible.origin.y))\t\(Int(visible.width))x\(Int(visible.height))\(flagStr)")
+            let flagStr = flags.isEmpty ? "" : "[\(flags.joined(separator: ","))]"
+            print("\(index)\t\(Int(frame.origin.x)),\(Int(frame.origin.y))\t\(Int(frame.width))x\(Int(frame.height))\t\(Int(visible.origin.x)),\(Int(visible.origin.y))\t\(Int(visible.width))x\(Int(visible.height))\t\(flagStr)")
         }
     }
 }
@@ -313,6 +314,7 @@ func activeScreenCommand() {
         printJSON(["x": Int(frame.origin.x), "y": Int(topLeftY),
                    "width": Int(visible.width), "height": Int(visible.height)])
     } else {
+        print("X\tY\tWIDTH\tHEIGHT")
         print("\(Int(frame.origin.x))\t\(Int(topLeftY))\t\(Int(visible.width))\t\(Int(visible.height))")
     }
 }
@@ -342,6 +344,7 @@ func listCommand(bundleId: String) throws {
         }
         printJSON(items)
     } else {
+        print("INDEX\tWID\tPOSITION\tSIZE\tTITLE")
         for w in windows {
             let wid = w.windowID.map { String($0) } ?? "?"
             print("\(w.id)\t\(wid)\t\(Int(w.position.x)),\(Int(w.position.y))\t\(Int(w.size.width))x\(Int(w.size.height))\t\(w.title)")
@@ -728,6 +731,9 @@ func watchCommand(bundleId: String, interval: Double) throws {
         }
     }
 
+    if !config.jsonOutput {
+        print("INDEX\tPOSITION\tSIZE\tTITLE")
+    }
     var previous = snapshot()
     printState(previous)
     fflush(stdout)
