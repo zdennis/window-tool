@@ -115,6 +115,24 @@ func parseFlashFlags(_ args: inout [String]) throws -> (color: NSColor, count: I
     return (color, count)
 }
 
+func parseHighlightFlags(_ args: [String]) throws -> (color: NSColor, duration: Double) {
+    var color: NSColor = .red
+    var duration: Double = 3.0
+    if let colorIdx = args.firstIndex(of: "--color") {
+        guard colorIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
+        }
+        color = try parseColor(args[colorIdx + 1])
+    }
+    if let durIdx = args.firstIndex(of: "--duration") {
+        guard durIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
+        }
+        duration = try parseDouble(args[durIdx + 1], label: "duration")
+    }
+    return (color, duration)
+}
+
 // MARK: - Accessibility Helpers
 
 /// Resolves an app identifier to a bundle ID.
@@ -526,6 +544,71 @@ func flashCommand(bundleId: String, selector: WindowSelector, color: NSColor, co
     app.run()
 }
 
+// MARK: - Highlight Overlay
+
+class HighlightView: NSView {
+    var borderColor: NSColor = .red
+    var borderWidth: CGFloat = 4
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(rect: bounds.insetBy(dx: borderWidth / 2, dy: borderWidth / 2))
+        path.lineWidth = borderWidth
+
+        let shadow = NSShadow()
+        shadow.shadowColor = borderColor.withAlphaComponent(0.7)
+        shadow.shadowBlurRadius = 15
+        shadow.shadowOffset = .zero
+        shadow.set()
+
+        borderColor.setStroke()
+        path.stroke()
+    }
+}
+
+func highlightCommand(bundleId: String, selector: WindowSelector, color: NSColor, duration: Double) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    let cocoaY = mainScreenHeight - window.position.y - window.size.height
+    let overlayFrame = NSRect(x: window.position.x, y: cocoaY,
+                              width: window.size.width, height: window.size.height)
+
+    let overlay = NSWindow(contentRect: overlayFrame,
+                           styleMask: .borderless,
+                           backing: .buffered,
+                           defer: false)
+    overlay.isOpaque = false
+    overlay.backgroundColor = .clear
+    overlay.level = .floating
+    overlay.ignoresMouseEvents = true
+    overlay.hasShadow = false
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let view = HighlightView(frame: NSRect(origin: .zero, size: overlayFrame.size))
+    view.borderColor = color
+    overlay.contentView = view
+    overlay.orderFrontRegardless()
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+        overlay.close()
+        app.stop(nil)
+        // app.stop() doesn't break out of run() immediately; post a dummy event to wake the run loop
+        let dummyEvent = NSEvent.otherEvent(with: .applicationDefined,
+                                            location: .zero,
+                                            modifierFlags: [],
+                                            timestamp: 0,
+                                            windowNumber: 0,
+                                            context: nil,
+                                            subtype: 0,
+                                            data1: 0,
+                                            data2: 0)!
+        app.postEvent(dummyEvent, atStart: true)
+    }
+    app.run()
+}
+
 /// Resizes window(s) without changing position.
 func resizeCommand(bundleId: String, selector: WindowSelector, width: CGFloat, height: CGFloat) throws {
     let windows = try resolveAllWindows(bundleId: bundleId, selector: selector)
@@ -900,6 +983,8 @@ func usage() {
       focus-by-title <pattern>                 Bring window to front by title match
       fullscreen <window>                      Enter macOS fullscreen mode
       fullscreen-by-title <pattern>            Enter fullscreen by title match
+      highlight <window> [--color C] [--duration S]  Draw a colored border around a window
+      highlight-by-title <pattern> [--color C] [--duration S]  Highlight by title match
       info <window>                            Show detailed info for a window
       list                                     List all windows with index, window ID, position, size, and title
       list-open-windows                        List apps with open windows
@@ -933,6 +1018,9 @@ func usage() {
     Snap positions:
       left, right, top, bottom, top-left, top-right,
       bottom-left, bottom-right, center, maximize
+
+    Colors:
+      red, green, blue, yellow, orange, purple, white, cyan, magenta
 
     Options:
       --app <name-or-id>  Target application by name or bundle ID (default: com.googlecode.iterm2)
@@ -991,6 +1079,7 @@ let accessibilityCommands: Set<String> = [
     "unfullscreen", "unfullscreen-by-title",
     "focus", "focus-by-title", "flash", "flash-by-title",
     "shake", "shake-by-title",
+    "highlight", "highlight-by-title",
     "list-open-windows"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
@@ -1227,6 +1316,21 @@ do {
         let pattern = flashArgs.removeFirst()
         let flags = try parseFlashFlags(&flashArgs)
         try flashCommand(bundleId: config.bundleId, selector: .byTitle(pattern), color: flags.color, count: flags.count)
+    case "highlight":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool highlight <window> [--color <color>] [--duration <seconds>]\n", stderr)
+            exit(1)
+        }
+        let selector = try parseWindowSelector(args[1])
+        let hlFlags = try parseHighlightFlags(Array(args.dropFirst()))
+        try highlightCommand(bundleId: config.bundleId, selector: selector, color: hlFlags.color, duration: hlFlags.duration)
+    case "highlight-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool highlight-by-title <pattern> [--color <color>] [--duration <seconds>]\n", stderr)
+            exit(1)
+        }
+        let hlFlags = try parseHighlightFlags(Array(args.dropFirst()))
+        try highlightCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), color: hlFlags.color, duration: hlFlags.duration)
     case "list-open-windows":
         listOpenWindowsCommand()
     case "screens":
