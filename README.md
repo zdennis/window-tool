@@ -35,86 +35,48 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 
 ### Commands
 
-#### list
-
-List all windows with their index, position, size, and title.
-
-```sh
-window-tool list
-```
-
-Output (tab-separated):
-
-```
-0    100,50    1200x900    My Window Title
-1    200,100   800x600     Another Window
-```
-
-#### count
-
-Print the number of windows.
-
-```sh
-window-tool count
-```
-
-#### move
-
-Move and optionally resize a window by index.
-
-```sh
-window-tool move <index> <x> <y> [<width> <height>]
-```
-
-Examples:
-
-```sh
-window-tool move 0 100 50              # move only
-window-tool move 0 100 50 1200 900     # move and resize
-```
-
-#### move-by-title
-
-Move and optionally resize all windows matching a title substring.
-
-```sh
-window-tool move-by-title <pattern> <x> <y> [<width> <height>]
-```
-
-Example:
-
-```sh
-window-tool move-by-title "my-notes" 0 0 1400 1000
-```
-
-#### screens
-
-List all displays with their bounds.
-
-```sh
-window-tool screens
-```
-
-Output (tab-separated): index, frame origin, frame size, visible origin, visible size, and flags (`main`, `mouse`).
-
-```
-0    0,0    5120x2160    0,0    5120x2129 [main,mouse]
-1    -3840,560    3840x1600    -3840,560    3840x1600
-```
-
-#### active-screen
-
-Print the bounds of the screen where the mouse cursor is (tab-separated: x, y, width, height). Coordinates use top-left origin, suitable for window positioning.
-
-```sh
-window-tool active-screen
-```
+| Command | Docs | Description |
+|---------|------|-------------|
+| `active-screen` | [README](docs/README.active-screen.md) | Print active screen bounds |
+| `columnize` | [README](docs/README.columnize.md) | Arrange windows side-by-side in columns |
+| `count` | [README](docs/README.count.md) | Print number of windows |
+| `focus` | [README](docs/README.focus.md) | Bring window to front by index |
+| `focus-by-title` | [README](docs/README.focus.md) | Bring window to front by title match |
+| `fullscreen` | [README](docs/README.fullscreen.md) | Enter macOS fullscreen mode |
+| `fullscreen-by-title` | [README](docs/README.fullscreen.md) | Enter fullscreen by title match |
+| `info` | [README](docs/README.info.md) | Show detailed info for a window |
+| `list` | [README](docs/README.list.md) | List all windows with index, position, size, and title |
+| `list-open-windows` | [README](docs/README.list-open-windows.md) | List apps with open windows |
+| `maximize` | [README](docs/README.maximize.md) | Maximize window to fill screen |
+| `maximize-by-title` | [README](docs/README.maximize.md) | Maximize windows matching title |
+| `minimize` | [README](docs/README.minimize.md) | Minimize a window by index |
+| `minimize-by-title` | [README](docs/README.minimize.md) | Minimize a window by title match |
+| `move` | [README](docs/README.move.md) | Move/resize window by index |
+| `move-by-title` | [README](docs/README.move.md) | Move/resize windows matching title |
+| `move-to-screen` | [README](docs/README.move-to-screen.md) | Move window to a different display |
+| `move-to-screen-by-title` | [README](docs/README.move-to-screen.md) | Move window to display by title |
+| `resize` | [README](docs/README.resize.md) | Resize window by index |
+| `resize-by-title` | [README](docs/README.resize.md) | Resize windows matching title |
+| `restore` | [README](docs/README.restore.md) | Restore all minimized windows |
+| `restore-layout` | [README](docs/README.restore-layout.md) | Restore window layout from a JSON file |
+| `save-layout` | [README](docs/README.save-layout.md) | Save window layout to a JSON file |
+| `screens` | [README](docs/README.screens.md) | List all displays with bounds |
+| `shake` | [README](docs/README.shake.md) | Shake a window by index |
+| `shake-by-title` | [README](docs/README.shake.md) | Shake a window by title match |
+| `snap` | [README](docs/README.snap.md) | Snap window to screen region |
+| `snap-by-title` | [README](docs/README.snap.md) | Snap window to screen region by title |
+| `stack` | [README](docs/README.stack.md) | Cascade windows with offset |
+| `unfullscreen` | [README](docs/README.unfullscreen.md) | Exit macOS fullscreen mode |
+| `unfullscreen-by-title` | [README](docs/README.unfullscreen.md) | Exit fullscreen by title match |
+| `watch` | [README](docs/README.watch.md) | Watch for window changes |
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
 | `--app <bundle-id>` | Target application bundle ID (default: `com.googlecode.iterm2`) |
+| `--json` | Output in JSON format |
+| `--version`, `-v` | Print version and exit |
 
 ## How it works
 
