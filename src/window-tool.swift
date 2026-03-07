@@ -632,31 +632,31 @@ func usage() {
     Usage: window-tool [--app <bundle-id>] <command> [args...]
 
     Commands:
-      list                                     List all windows with index, position, size, and title
-      info <index>                             Show detailed info for a window
+      active-screen                            Print active screen bounds (x, y, width, height)
       count                                    Print number of windows
-      move <index> <x> <y> [<width> <height>]  Move/resize window by index
-      move-by-title <pattern> <x> <y> [<width> <height>]  Move/resize windows matching title
-      resize <index> <width> <height>          Resize window by index
-      resize-by-title <pattern> <width> <height>  Resize windows matching title
-      snap <index> <position>                  Snap window to screen region
-      snap-by-title <pattern> <position>       Snap window to screen region by title
-      move-to-screen <index> <screen>          Move window to a different display
-      move-to-screen-by-title <pattern> <screen>  Move window to display by title
+      focus <index>                            Bring window to front by index
+      focus-by-title <pattern>                 Bring window to front by title match
+      info <index>                             Show detailed info for a window
+      list                                     List all windows with index, position, size, and title
+      list-open-windows                        List apps with open windows
       minimize <index>                         Minimize a window by index
       minimize-by-title <pattern>              Minimize a window by title match
+      move <index> <x> <y> [<w> <h>]           Move/resize window by index
+      move-by-title <pattern> <x> <y> [<w> <h>]  Move/resize windows matching title
+      move-to-screen <index> <screen>          Move window to a different display
+      move-to-screen-by-title <pattern> <screen>  Move window to display by title
+      resize <index> <width> <height>          Resize window by index
+      resize-by-title <pattern> <width> <height>  Resize windows matching title
       restore                                  Restore all minimized windows
-      save-layout <file>                       Save window layout to a JSON file
       restore-layout <file>                    Restore window layout from a JSON file
-      focus <index>                             Bring window to front by index
-      focus-by-title <pattern>                 Bring window to front by title match
+      save-layout <file>                       Save window layout to a JSON file
+      screens                                  List all displays with bounds
       shake <index> [offset] [count] [delay]   Shake a window by index
       shake-by-title <pattern> [offset] [count] [delay]  Shake a window by title match
+      snap <index> <position>                  Snap window to screen region
+      snap-by-title <pattern> <position>       Snap window to screen region by title
       stack [offset]                           Cascade windows with offset (default: 30)
       watch [interval]                         Watch for window changes (default: 1.0s)
-      list-open-windows                        List apps with open windows
-      screens                                  List all displays with bounds
-      active-screen                            Print active screen bounds (x, y, width, height)
 
     Snap positions:
       left, right, top, bottom, top-left, top-right,
