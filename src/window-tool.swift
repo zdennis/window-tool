@@ -1,9 +1,14 @@
 import Cocoa
 import Foundation
 
-// MARK: - JSON Output
+// MARK: - Configuration
 
-var jsonOutput = false
+struct Config {
+    var bundleId: String = "com.googlecode.iterm2"
+    var jsonOutput: Bool = false
+}
+
+var config = Config()
 
 func printJSON(_ value: Any) {
     if let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
@@ -111,7 +116,7 @@ enum WindowSelector {
 }
 
 func requireApp(_ bundleId: String) -> AXUIElement {
-    guard let app = getAppElement(bundleId: bundleId) else {
+    guard let app = getAppElement(bundleId: config.bundleId) else {
         fputs("Error: Application not found: \(bundleId)\n", stderr)
         exit(1)
     }
@@ -163,7 +168,7 @@ func resolveAllWindows(bundleId: String, selector: WindowSelector) -> [WindowInf
 /// Output columns: index, frame origin, frame size, visible origin, visible size, and flags ([main], [mouse]).
 func screensCommand() {
     let mouseLocation = NSEvent.mouseLocation
-    if jsonOutput {
+    if config.jsonOutput {
         var items: [[String: Any]] = []
         for (index, screen) in NSScreen.screens.enumerated() {
             let frame = screen.frame
@@ -205,7 +210,7 @@ func activeScreenCommand() {
     // Output: x,y width height visible_x,visible_y visible_width visible_height
     // NSScreen y-axis is bottom-up; convert visible frame to top-left origin for window positioning
     let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
-    if jsonOutput {
+    if config.jsonOutput {
         printJSON(["x": Int(frame.origin.x), "y": Int(topLeftY),
                    "width": Int(visible.width), "height": Int(visible.height)])
     } else {
@@ -233,7 +238,7 @@ func checkAccessibility() {
 func listCommand(bundleId: String) {
     let app = requireApp(bundleId)
     let windows = getWindows(appElement: app)
-    if jsonOutput {
+    if config.jsonOutput {
         let items = windows.map { w in
             ["index": w.id, "x": Int(w.position.x), "y": Int(w.position.y),
              "width": Int(w.size.width), "height": Int(w.size.height), "title": w.title] as [String: Any]
@@ -248,7 +253,7 @@ func listCommand(bundleId: String) {
 
 /// Moves (and optionally resizes) window(s).
 func moveCommand(bundleId: String, selector: WindowSelector, x: CGFloat, y: CGFloat, width: CGFloat?, height: CGFloat?) {
-    let windows = resolveAllWindows(bundleId: bundleId, selector: selector)
+    let windows = resolveAllWindows(bundleId: config.bundleId, selector: selector)
     for window in windows {
         moveWindow(window.element, x: x, y: y)
         if let w = width, let h = height {
@@ -276,12 +281,12 @@ func listOpenWindowsCommand() {
             seen.insert(bundleId)
             let appName = app.localizedName ?? "Unknown"
             for w in windows {
-                entries.append((bundleId: bundleId, name: appName, title: w.title))
+                entries.append((bundleId: config.bundleId, name: appName, title: w.title))
             }
         }
     }
     entries.sort(by: { $0.name.lowercased() < $1.name.lowercased() })
-    if jsonOutput {
+    if config.jsonOutput {
         let items = entries.map { e in
             ["app": e.name, "bundle_id": e.bundleId, "title": e.title]
         }
@@ -302,7 +307,7 @@ func listOpenWindowsCommand() {
 
 /// Brings a window to the front. Activates the application and raises the window.
 func focusCommand(bundleId: String, selector: WindowSelector) {
-    let window = resolveWindow(bundleId: bundleId, selector: selector)
+    let window = resolveWindow(bundleId: config.bundleId, selector: selector)
     let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
     runningApps.first?.activate()
     AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
@@ -311,7 +316,7 @@ func focusCommand(bundleId: String, selector: WindowSelector) {
 
 /// Shakes a window horizontally to draw attention, then restores its position.
 func shakeCommand(bundleId: String, selector: WindowSelector, offset: Int, count: Int, delay: Double) {
-    let window = resolveWindow(bundleId: bundleId, selector: selector)
+    let window = resolveWindow(bundleId: config.bundleId, selector: selector)
     let originalX = window.position.x
     let originalY = window.position.y
 
@@ -326,7 +331,7 @@ func shakeCommand(bundleId: String, selector: WindowSelector, offset: Int, count
 
 /// Resizes window(s) without changing position.
 func resizeCommand(bundleId: String, selector: WindowSelector, width: CGFloat, height: CGFloat) {
-    let windows = resolveAllWindows(bundleId: bundleId, selector: selector)
+    let windows = resolveAllWindows(bundleId: config.bundleId, selector: selector)
     for window in windows {
         resizeWindow(window.element, width: width, height: height)
     }
@@ -349,60 +354,64 @@ func screenBoundsForWindow(_ window: WindowInfo) -> (x: CGFloat, y: CGFloat, wid
     return (x: visible.origin.x, y: topLeftY, width: visible.width, height: visible.height)
 }
 
-let snapPositions = ["left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right", "center", "maximize"]
+enum SnapPosition: String, CaseIterable {
+    case left, right, top, bottom
+    case topLeft = "top-left"
+    case topRight = "top-right"
+    case bottomLeft = "bottom-left"
+    case bottomRight = "bottom-right"
+    case center, maximize
 
-/// Snaps a window to a named screen region.
-func snapCommand(bundleId: String, selector: WindowSelector, position: String) {
-    let window = resolveWindow(bundleId: bundleId, selector: selector)
-    snapWindow(window, position: position)
+    static var allNames: String {
+        allCases.map(\.rawValue).joined(separator: ", ")
+    }
 }
 
-func snapWindow(_ window: WindowInfo, position: String) {
-    let s = screenBoundsForWindow(window)
-    let halfW = s.width / 2
-    let halfH = s.height / 2
+/// Snaps a window to a named screen region.
+func snapCommand(bundleId: String, selector: WindowSelector, position: SnapPosition) {
+    let window = resolveWindow(bundleId: config.bundleId, selector: selector)
+    let bounds = screenBoundsForWindow(window)
+    let halfW = bounds.width / 2
+    let halfH = bounds.height / 2
 
     switch position {
-    case "left":
-        moveWindow(window.element, x: s.x, y: s.y)
-        resizeWindow(window.element, width: halfW, height: s.height)
-    case "right":
-        moveWindow(window.element, x: s.x + halfW, y: s.y)
-        resizeWindow(window.element, width: halfW, height: s.height)
-    case "top":
-        moveWindow(window.element, x: s.x, y: s.y)
-        resizeWindow(window.element, width: s.width, height: halfH)
-    case "bottom":
-        moveWindow(window.element, x: s.x, y: s.y + halfH)
-        resizeWindow(window.element, width: s.width, height: halfH)
-    case "top-left":
-        moveWindow(window.element, x: s.x, y: s.y)
+    case .left:
+        moveWindow(window.element, x: bounds.x, y: bounds.y)
+        resizeWindow(window.element, width: halfW, height: bounds.height)
+    case .right:
+        moveWindow(window.element, x: bounds.x + halfW, y: bounds.y)
+        resizeWindow(window.element, width: halfW, height: bounds.height)
+    case .top:
+        moveWindow(window.element, x: bounds.x, y: bounds.y)
+        resizeWindow(window.element, width: bounds.width, height: halfH)
+    case .bottom:
+        moveWindow(window.element, x: bounds.x, y: bounds.y + halfH)
+        resizeWindow(window.element, width: bounds.width, height: halfH)
+    case .topLeft:
+        moveWindow(window.element, x: bounds.x, y: bounds.y)
         resizeWindow(window.element, width: halfW, height: halfH)
-    case "top-right":
-        moveWindow(window.element, x: s.x + halfW, y: s.y)
+    case .topRight:
+        moveWindow(window.element, x: bounds.x + halfW, y: bounds.y)
         resizeWindow(window.element, width: halfW, height: halfH)
-    case "bottom-left":
-        moveWindow(window.element, x: s.x, y: s.y + halfH)
+    case .bottomLeft:
+        moveWindow(window.element, x: bounds.x, y: bounds.y + halfH)
         resizeWindow(window.element, width: halfW, height: halfH)
-    case "bottom-right":
-        moveWindow(window.element, x: s.x + halfW, y: s.y + halfH)
+    case .bottomRight:
+        moveWindow(window.element, x: bounds.x + halfW, y: bounds.y + halfH)
         resizeWindow(window.element, width: halfW, height: halfH)
-    case "center":
+    case .center:
         let w = window.size.width
         let h = window.size.height
-        moveWindow(window.element, x: s.x + (s.width - w) / 2, y: s.y + (s.height - h) / 2)
-    case "maximize":
-        moveWindow(window.element, x: s.x, y: s.y)
-        resizeWindow(window.element, width: s.width, height: s.height)
-    default:
-        fputs("Error: Unknown snap position '\(position)'. Valid: \(snapPositions.joined(separator: ", "))\n", stderr)
-        exit(1)
+        moveWindow(window.element, x: bounds.x + (bounds.width - w) / 2, y: bounds.y + (bounds.height - h) / 2)
+    case .maximize:
+        moveWindow(window.element, x: bounds.x, y: bounds.y)
+        resizeWindow(window.element, width: bounds.width, height: bounds.height)
     }
 }
 
 /// Moves a window to a different screen, placing it at the top-left of the visible area.
 func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex: Int) {
-    let window = resolveWindow(bundleId: bundleId, selector: selector)
+    let window = resolveWindow(bundleId: config.bundleId, selector: selector)
     let screens = NSScreen.screens
     guard screens.indices.contains(screenIndex) else {
         fputs("Error: Screen index \(screenIndex) out of range (0..\(screens.count - 1))\n", stderr)
@@ -417,7 +426,7 @@ func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex
 
 /// Minimizes a window.
 func minimizeCommand(bundleId: String, selector: WindowSelector) {
-    let window = resolveWindow(bundleId: bundleId, selector: selector)
+    let window = resolveWindow(bundleId: config.bundleId, selector: selector)
     AXUIElementSetAttributeValue(window.element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
 }
 
@@ -441,7 +450,7 @@ func restoreCommand(bundleId: String) {
 
 /// Prints detailed info for a single window by index.
 func infoCommand(bundleId: String, index: Int) {
-    let w = resolveWindow(bundleId: bundleId, selector: .byIndex(index))
+    let w = resolveWindow(bundleId: config.bundleId, selector: .byIndex(index))
 
     var minimizedRef: CFTypeRef?
     AXUIElementCopyAttributeValue(w.element, kAXMinimizedAttribute as CFString, &minimizedRef)
@@ -451,7 +460,7 @@ func infoCommand(bundleId: String, index: Int) {
     AXUIElementCopyAttributeValue(w.element, "AXFullScreen" as CFString, &fullscreenRef)
     let fullscreen = (fullscreenRef as? Bool) ?? false
 
-    if jsonOutput {
+    if config.jsonOutput {
         printJSON(["index": w.id, "title": w.title,
                    "x": Int(w.position.x), "y": Int(w.position.y),
                    "width": Int(w.size.width), "height": Int(w.size.height),
@@ -576,12 +585,12 @@ func watchCommand(bundleId: String, interval: Double) {
 
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        if jsonOutput { printJSON(["count": 0]) } else { print("0") }
+    guard let app = getAppElement(bundleId: config.bundleId) else {
+        if config.jsonOutput { printJSON(["count": 0]) } else { print("0") }
         return  // count returns 0 for unknown apps rather than erroring
     }
     let windows = getWindows(appElement: app)
-    if jsonOutput { printJSON(["count": windows.count]) } else { print("\(windows.count)") }
+    if config.jsonOutput { printJSON(["count": windows.count]) } else { print("\(windows.count)") }
 }
 
 // MARK: - Main
@@ -635,11 +644,10 @@ func usage() {
 }
 
 var args = Array(CommandLine.arguments.dropFirst())
-var bundleId = "com.googlecode.iterm2"
 
 // Parse --json flag
 if let jsonIdx = args.firstIndex(of: "--json") {
-    jsonOutput = true
+    config.jsonOutput = true
     args.remove(at: jsonIdx)
 }
 
@@ -649,7 +657,7 @@ if let appIdx = args.firstIndex(of: "--app") {
         fputs("Error: --app requires a bundle identifier\n", stderr)
         exit(1)
     }
-    bundleId = args[appIdx + 1]
+    config.bundleId = args[appIdx + 1]
     args.removeSubrange(appIdx...appIdx+1)
 }
 
@@ -675,15 +683,15 @@ if accessibilityCommands.contains(command) {
 
 switch command {
 case "list":
-    listCommand(bundleId: bundleId)
+    listCommand(bundleId: config.bundleId)
 case "info":
     guard args.count >= 2 else {
         fputs("Usage: window-tool info <index>\n", stderr)
         exit(1)
     }
-    infoCommand(bundleId: bundleId, index: parseInt(args[1], label: "index"))
+    infoCommand(bundleId: config.bundleId, index: parseInt(args[1], label: "index"))
 case "count":
-    countCommand(bundleId: bundleId)
+    countCommand(bundleId: config.bundleId)
 case "move":
     guard args.count >= 4 else {
         fputs("Usage: window-tool move <index> <x> <y> [<width> <height>]\n", stderr)
@@ -698,7 +706,7 @@ case "move":
         width = CGFloat(parseDouble(args[4], label: "width"))
         height = CGFloat(parseDouble(args[5], label: "height"))
     }
-    moveCommand(bundleId: bundleId, selector: .byIndex(index), x: x, y: y, width: width, height: height)
+    moveCommand(bundleId: config.bundleId, selector: .byIndex(index), x: x, y: y, width: width, height: height)
 case "move-by-title":
     guard args.count >= 4 else {
         fputs("Usage: window-tool move-by-title <pattern> <x> <y> [<width> <height>]\n", stderr)
@@ -713,7 +721,7 @@ case "move-by-title":
         width = CGFloat(parseDouble(args[4], label: "width"))
         height = CGFloat(parseDouble(args[5], label: "height"))
     }
-    moveCommand(bundleId: bundleId, selector: .byTitle(pattern), x: x, y: y, width: width, height: height)
+    moveCommand(bundleId: config.bundleId, selector: .byTitle(pattern), x: x, y: y, width: width, height: height)
 case "resize":
     guard args.count >= 4 else {
         fputs("Usage: window-tool resize <index> <width> <height>\n", stderr)
@@ -722,57 +730,65 @@ case "resize":
     let index = parseInt(args[1], label: "index")
     let width = CGFloat(parseDouble(args[2], label: "width"))
     let height = CGFloat(parseDouble(args[3], label: "height"))
-    resizeCommand(bundleId: bundleId, selector: .byIndex(index), width: width, height: height)
+    resizeCommand(bundleId: config.bundleId, selector: .byIndex(index), width: width, height: height)
 case "resize-by-title":
     guard args.count >= 4 else {
         fputs("Usage: window-tool resize-by-title <pattern> <width> <height>\n", stderr)
         exit(1)
     }
-    resizeCommand(bundleId: bundleId, selector: .byTitle(args[1]), width: CGFloat(parseDouble(args[2], label: "width")), height: CGFloat(parseDouble(args[3], label: "height")))
+    resizeCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), width: CGFloat(parseDouble(args[2], label: "width")), height: CGFloat(parseDouble(args[3], label: "height")))
 case "snap":
     guard args.count >= 3 else {
-        fputs("Usage: window-tool snap <index> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
+        fputs("Usage: window-tool snap <index> <position>\nPositions: \(SnapPosition.allNames)\n", stderr)
         exit(1)
     }
-    snapCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")), position: args[2])
+    guard let position = SnapPosition(rawValue: args[2]) else {
+        fputs("Error: Unknown snap position '\(args[2])'. Valid: \(SnapPosition.allNames)\n", stderr)
+        exit(1)
+    }
+    snapCommand(bundleId: config.bundleId, selector: .byIndex(parseInt(args[1], label: "index")), position: position)
 case "snap-by-title":
     guard args.count >= 3 else {
-        fputs("Usage: window-tool snap-by-title <pattern> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
+        fputs("Usage: window-tool snap-by-title <pattern> <position>\nPositions: \(SnapPosition.allNames)\n", stderr)
         exit(1)
     }
-    snapCommand(bundleId: bundleId, selector: .byTitle(args[1]), position: args[2])
+    guard let position = SnapPosition(rawValue: args[2]) else {
+        fputs("Error: Unknown snap position '\(args[2])'. Valid: \(SnapPosition.allNames)\n", stderr)
+        exit(1)
+    }
+    snapCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), position: position)
 case "move-to-screen":
     guard args.count >= 3 else {
         fputs("Usage: window-tool move-to-screen <index> <screen>\n", stderr)
         exit(1)
     }
-    moveToScreenCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")), screenIndex: parseInt(args[2], label: "screen"))
+    moveToScreenCommand(bundleId: config.bundleId, selector: .byIndex(parseInt(args[1], label: "index")), screenIndex: parseInt(args[2], label: "screen"))
 case "move-to-screen-by-title":
     guard args.count >= 3 else {
         fputs("Usage: window-tool move-to-screen-by-title <pattern> <screen>\n", stderr)
         exit(1)
     }
-    moveToScreenCommand(bundleId: bundleId, selector: .byTitle(args[1]), screenIndex: parseInt(args[2], label: "screen"))
+    moveToScreenCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), screenIndex: parseInt(args[2], label: "screen"))
 case "minimize":
     guard args.count >= 2 else {
         fputs("Usage: window-tool minimize <index>\n", stderr)
         exit(1)
     }
-    minimizeCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")))
+    minimizeCommand(bundleId: config.bundleId, selector: .byIndex(parseInt(args[1], label: "index")))
 case "minimize-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool minimize-by-title <pattern>\n", stderr)
         exit(1)
     }
-    minimizeCommand(bundleId: bundleId, selector: .byTitle(args[1]))
+    minimizeCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
 case "restore":
-    restoreCommand(bundleId: bundleId)
+    restoreCommand(bundleId: config.bundleId)
 case "save-layout":
     guard args.count >= 2 else {
         fputs("Usage: window-tool save-layout <file>\n", stderr)
         exit(1)
     }
-    saveLayoutCommand(bundleId: bundleId, filePath: args[1])
+    saveLayoutCommand(bundleId: config.bundleId, filePath: args[1])
 case "restore-layout":
     guard args.count >= 2 else {
         fputs("Usage: window-tool restore-layout <file>\n", stderr)
@@ -781,22 +797,22 @@ case "restore-layout":
     restoreLayoutCommand(filePath: args[1])
 case "stack":
     let offset = args.count >= 2 ? parseInt(args[1], label: "offset") : 30
-    stackCommand(bundleId: bundleId, offsetStep: offset)
+    stackCommand(bundleId: config.bundleId, offsetStep: offset)
 case "watch":
     let interval = args.count >= 2 ? parseDouble(args[1], label: "interval") : 1.0
-    watchCommand(bundleId: bundleId, interval: interval)
+    watchCommand(bundleId: config.bundleId, interval: interval)
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
         exit(1)
     }
-    focusCommand(bundleId: bundleId, selector: .byIndex(parseInt(args[1], label: "index")))
+    focusCommand(bundleId: config.bundleId, selector: .byIndex(parseInt(args[1], label: "index")))
 case "focus-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus-by-title <pattern>\n", stderr)
         exit(1)
     }
-    focusCommand(bundleId: bundleId, selector: .byTitle(args[1]))
+    focusCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
 case "shake":
     guard args.count >= 2 else {
         fputs("Usage: window-tool shake <index> [offset] [count] [delay]\n", stderr)
@@ -806,7 +822,7 @@ case "shake":
     let offset = args.count >= 3 ? parseInt(args[2], label: "offset") : 12
     let count = args.count >= 4 ? parseInt(args[3], label: "count") : 6
     let delay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
-    shakeCommand(bundleId: bundleId, selector: selector, offset: offset, count: count, delay: delay)
+    shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
 case "shake-by-title":
     guard args.count >= 2 else {
         fputs("Usage: window-tool shake-by-title <pattern> [offset] [count] [delay]\n", stderr)
@@ -816,7 +832,7 @@ case "shake-by-title":
     let offset = args.count >= 3 ? parseInt(args[2], label: "offset") : 12
     let count = args.count >= 4 ? parseInt(args[3], label: "count") : 6
     let delay = args.count >= 5 ? parseDouble(args[4], label: "delay") : 0.04
-    shakeCommand(bundleId: bundleId, selector: selector, offset: offset, count: count, delay: delay)
+    shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
 case "list-open-windows":
     listOpenWindowsCommand()
 case "screens":
