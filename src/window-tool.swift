@@ -292,6 +292,38 @@ func shakeByTitleCommand(bundleId: String, titlePattern: String, offset: Int, co
     moveWindow(window.element, x: originalX, y: originalY)
 }
 
+/// Resizes a window by its index without changing its position.
+func resizeCommand(bundleId: String, index: Int, width: CGFloat, height: CGFloat) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard index >= 0 && index < windows.count else {
+        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+        exit(1)
+    }
+    resizeWindow(windows[index].element, width: width, height: height)
+}
+
+/// Resizes all windows whose title contains the given pattern without changing their position.
+func resizeByTitleCommand(bundleId: String, titlePattern: String, width: CGFloat, height: CGFloat) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    let matching = windows.filter { $0.title.contains(titlePattern) }
+    if matching.isEmpty {
+        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
+        exit(1)
+    }
+    for window in matching {
+        resizeWindow(window.element, width: width, height: height)
+    }
+    print("Resized \(matching.count) window(s) matching '\(titlePattern)'")
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -314,6 +346,8 @@ func usage() {
       count                                    Print number of windows
       move <index> <x> <y> [<width> <height>]  Move/resize window by index
       move-by-title <pattern> <x> <y> [<width> <height>]  Move/resize windows matching title
+      resize <index> <width> <height>          Resize window by index
+      resize-by-title <pattern> <width> <height>  Resize windows matching title
       focus <index>                             Bring window to front by index
       focus-by-title <pattern>                 Bring window to front by title match
       shake <index> [offset] [count] [delay]   Shake a window by index
@@ -350,6 +384,7 @@ guard let command = args.first else {
 // Commands that need Accessibility access
 let accessibilityCommands: Set<String> = [
     "list", "count", "move", "move-by-title",
+    "resize", "resize-by-title",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -392,6 +427,21 @@ case "move-by-title":
         height = CGFloat(Double(args[5])!)
     }
     moveByTitleCommand(bundleId: bundleId, titlePattern: pattern, x: x, y: y, width: width, height: height)
+case "resize":
+    guard args.count >= 4 else {
+        fputs("Usage: window-tool resize <index> <width> <height>\n", stderr)
+        exit(1)
+    }
+    let index = Int(args[1])!
+    let width = CGFloat(Double(args[2])!)
+    let height = CGFloat(Double(args[3])!)
+    resizeCommand(bundleId: bundleId, index: index, width: width, height: height)
+case "resize-by-title":
+    guard args.count >= 4 else {
+        fputs("Usage: window-tool resize-by-title <pattern> <width> <height>\n", stderr)
+        exit(1)
+    }
+    resizeByTitleCommand(bundleId: bundleId, titlePattern: args[1], width: CGFloat(Double(args[2])!), height: CGFloat(Double(args[3])!))
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
