@@ -659,6 +659,22 @@ func restoreLayoutCommand(filePath: String) {
     print("Restored \(restored)/\(savedWindows.count) window(s) for \(bundleId)")
 }
 
+/// Cascades all windows for an application, offsetting each by a fixed amount.
+func stackCommand(bundleId: String, offsetStep: Int) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    if windows.isEmpty { return }
+    let s = screenBoundsForWindow(windows[0])
+    for (i, w) in windows.enumerated() {
+        let offset = CGFloat(i * offsetStep)
+        moveWindow(w.element, x: s.x + offset, y: s.y + offset)
+    }
+    print("Stacked \(windows.count) window(s)")
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -693,6 +709,7 @@ func usage() {
       restore                                  Restore all minimized windows
       save-layout <file>                       Save window layout to a JSON file
       restore-layout <file>                    Restore window layout from a JSON file
+      stack [offset]                           Cascade windows with offset (default: 30)
 
     Snap positions:
       left, right, top, bottom, top-left, top-right,
@@ -744,7 +761,7 @@ let accessibilityCommands: Set<String> = [
     "snap", "snap-by-title",
     "move-to-screen", "move-to-screen-by-title",
     "minimize", "minimize-by-title", "restore",
-    "save-layout", "restore-layout",
+    "save-layout", "restore-layout", "stack",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -858,6 +875,9 @@ case "restore-layout":
         exit(1)
     }
     restoreLayoutCommand(filePath: args[1])
+case "stack":
+    let offset = args.count >= 2 ? Int(args[1])! : 30
+    stackCommand(bundleId: bundleId, offsetStep: offset)
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
