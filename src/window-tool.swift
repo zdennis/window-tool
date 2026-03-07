@@ -74,7 +74,7 @@ func parseDouble(_ s: String, label: String) throws -> Double {
 
 // MARK: - Color Parsing
 
-let validColors = ["red", "green", "blue", "yellow", "orange", "purple", "white", "cyan", "magenta"]
+let validColors = ["red", "green", "blue", "yellow", "orange", "purple", "white", "cyan", "magenta", "random"]
 
 func parseColor(_ name: String) throws -> NSColor {
     switch name.lowercased() {
@@ -87,6 +87,9 @@ func parseColor(_ name: String) throws -> NSColor {
     case "white": return .white
     case "cyan": return .cyan
     case "magenta": return .magenta
+    case "random":
+        let colors: [NSColor] = [.red, .green, .blue, .yellow, .orange, .purple, .white, .cyan, .magenta]
+        return colors[Int.random(in: 0..<colors.count)]
     default:
         throw WindowToolError.invalidArgument(value: name, label: "color (valid: \(validColors.joined(separator: ", ")))")
     }
