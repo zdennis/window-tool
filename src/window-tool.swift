@@ -103,6 +103,60 @@ func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
     }
 }
 
+// MARK: - Window Resolution
+
+enum WindowSelector {
+    case byIndex(Int)
+    case byTitle(String)
+}
+
+func requireApp(_ bundleId: String) -> AXUIElement {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    return app
+}
+
+func resolveWindow(bundleId: String, selector: WindowSelector) -> WindowInfo {
+    let app = requireApp(bundleId)
+    let windows = getWindows(appElement: app)
+    switch selector {
+    case .byIndex(let index):
+        guard windows.indices.contains(index) else {
+            fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
+            exit(1)
+        }
+        return windows[index]
+    case .byTitle(let pattern):
+        guard let window = windows.first(where: { $0.title.contains(pattern) }) else {
+            fputs("Error: No window found matching '\(pattern)'\n", stderr)
+            exit(1)
+        }
+        return window
+    }
+}
+
+func resolveAllWindows(bundleId: String, selector: WindowSelector) -> [WindowInfo] {
+    let app = requireApp(bundleId)
+    let windows = getWindows(appElement: app)
+    switch selector {
+    case .byIndex(let index):
+        guard windows.indices.contains(index) else {
+            fputs("Error: Window index \(index) out of range\(windows.isEmpty ? " (no windows)" : " (0..\(windows.count - 1))")\n", stderr)
+            exit(1)
+        }
+        return [windows[index]]
+    case .byTitle(let pattern):
+        let matching = windows.filter { $0.title.contains(pattern) }
+        if matching.isEmpty {
+            fputs("Error: No window found matching '\(pattern)'\n", stderr)
+            exit(1)
+        }
+        return matching
+    }
+}
+
 // MARK: - Screen Helpers
 
 /// Prints info for all connected displays.
