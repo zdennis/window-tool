@@ -421,6 +421,51 @@ func snapWindow(_ window: WindowInfo, position: String) {
     }
 }
 
+/// Moves a window to a different screen by index, preserving its relative position within the visible area.
+func moveToScreenCommand(bundleId: String, windowIndex: Int, screenIndex: Int) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard windowIndex >= 0 && windowIndex < windows.count else {
+        fputs("Error: Window index \(windowIndex) out of range (0..\(windows.count - 1))\n", stderr)
+        exit(1)
+    }
+    guard screenIndex >= 0 && screenIndex < NSScreen.screens.count else {
+        fputs("Error: Screen index \(screenIndex) out of range (0..\(NSScreen.screens.count - 1))\n", stderr)
+        exit(1)
+    }
+    let window = windows[windowIndex]
+    let targetScreen = NSScreen.screens[screenIndex]
+    let frame = targetScreen.frame
+    let visible = targetScreen.visibleFrame
+    let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
+    moveWindow(window.element, x: visible.origin.x, y: topLeftY)
+}
+
+/// Moves the first window matching a title pattern to a different screen.
+func moveToScreenByTitleCommand(bundleId: String, titlePattern: String, screenIndex: Int) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
+        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
+        exit(1)
+    }
+    guard screenIndex >= 0 && screenIndex < NSScreen.screens.count else {
+        fputs("Error: Screen index \(screenIndex) out of range (0..\(NSScreen.screens.count - 1))\n", stderr)
+        exit(1)
+    }
+    let targetScreen = NSScreen.screens[screenIndex]
+    let frame = targetScreen.frame
+    let visible = targetScreen.visibleFrame
+    let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
+    moveWindow(window.element, x: visible.origin.x, y: topLeftY)
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -447,6 +492,8 @@ func usage() {
       resize-by-title <pattern> <width> <height>  Resize windows matching title
       snap <index> <position>                  Snap window to screen region
       snap-by-title <pattern> <position>       Snap window to screen region by title
+      move-to-screen <index> <screen>          Move window to a different display
+      move-to-screen-by-title <pattern> <screen>  Move window to display by title
 
     Snap positions:
       left, right, top, bottom, top-left, top-right,
@@ -489,6 +536,7 @@ let accessibilityCommands: Set<String> = [
     "list", "count", "move", "move-by-title",
     "resize", "resize-by-title",
     "snap", "snap-by-title",
+    "move-to-screen", "move-to-screen-by-title",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -558,6 +606,18 @@ case "snap-by-title":
         exit(1)
     }
     snapByTitleCommand(bundleId: bundleId, titlePattern: args[1], position: args[2])
+case "move-to-screen":
+    guard args.count >= 3 else {
+        fputs("Usage: window-tool move-to-screen <index> <screen>\n", stderr)
+        exit(1)
+    }
+    moveToScreenCommand(bundleId: bundleId, windowIndex: Int(args[1])!, screenIndex: Int(args[2])!)
+case "move-to-screen-by-title":
+    guard args.count >= 3 else {
+        fputs("Usage: window-tool move-to-screen-by-title <pattern> <screen>\n", stderr)
+        exit(1)
+    }
+    moveToScreenByTitleCommand(bundleId: bundleId, titlePattern: args[1], screenIndex: Int(args[2])!)
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
