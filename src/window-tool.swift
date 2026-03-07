@@ -466,6 +466,55 @@ func moveToScreenByTitleCommand(bundleId: String, titlePattern: String, screenIn
     moveWindow(window.element, x: visible.origin.x, y: topLeftY)
 }
 
+/// Minimizes a window by its index.
+func minimizeCommand(bundleId: String, index: Int) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard index >= 0 && index < windows.count else {
+        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+        exit(1)
+    }
+    AXUIElementSetAttributeValue(windows[index].element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
+}
+
+/// Minimizes the first window matching a title pattern.
+func minimizeByTitleCommand(bundleId: String, titlePattern: String) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
+        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
+        exit(1)
+    }
+    AXUIElementSetAttributeValue(window.element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
+}
+
+/// Restores (unminimizes) all minimized windows for the given application.
+func restoreCommand(bundleId: String) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    var windowsRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
+    guard let windows = windowsRef as? [AXUIElement] else { return }
+    var restored = 0
+    for window in windows {
+        var minimizedRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedRef)
+        if let minimized = minimizedRef as? Bool, minimized {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
+            restored += 1
+        }
+    }
+    print("Restored \(restored) window(s)")
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -494,6 +543,9 @@ func usage() {
       snap-by-title <pattern> <position>       Snap window to screen region by title
       move-to-screen <index> <screen>          Move window to a different display
       move-to-screen-by-title <pattern> <screen>  Move window to display by title
+      minimize <index>                         Minimize a window by index
+      minimize-by-title <pattern>              Minimize a window by title match
+      restore                                  Restore all minimized windows
 
     Snap positions:
       left, right, top, bottom, top-left, top-right,
@@ -537,6 +589,7 @@ let accessibilityCommands: Set<String> = [
     "resize", "resize-by-title",
     "snap", "snap-by-title",
     "move-to-screen", "move-to-screen-by-title",
+    "minimize", "minimize-by-title", "restore",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -618,6 +671,20 @@ case "move-to-screen-by-title":
         exit(1)
     }
     moveToScreenByTitleCommand(bundleId: bundleId, titlePattern: args[1], screenIndex: Int(args[2])!)
+case "minimize":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool minimize <index>\n", stderr)
+        exit(1)
+    }
+    minimizeCommand(bundleId: bundleId, index: Int(args[1])!)
+case "minimize-by-title":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool minimize-by-title <pattern>\n", stderr)
+        exit(1)
+    }
+    minimizeByTitleCommand(bundleId: bundleId, titlePattern: args[1])
+case "restore":
+    restoreCommand(bundleId: bundleId)
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
