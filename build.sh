@@ -9,6 +9,7 @@ echo "Compiling window-tool..."
 swiftc -O \
   -o "$SCRIPT_DIR/bin/window-tool" \
   "$SCRIPT_DIR/src/window-tool.swift" \
-  -framework Cocoa
+  -framework Cocoa \
+  -framework ScreenCaptureKit
 
 echo "Built: $SCRIPT_DIR/bin/window-tool"
