@@ -176,26 +176,35 @@ func moveByTitleCommand(bundleId: String, titlePattern: String, x: CGFloat, y: C
 }
 
 /// Lists all running applications that have at least one open window.
-/// Output columns: application name (padded), bundle identifier. Sorted alphabetically by name.
+/// Output: one line per window, with application name, bundle identifier, and window title.
+/// Sorted alphabetically by application name.
 func listOpenWindowsCommand() {
     let apps = NSWorkspace.shared.runningApplications
-    var entries: [(bundleId: String, name: String)] = []
+    var entries: [(bundleId: String, name: String, title: String)] = []
     var seen = Set<String>()
     for app in apps {
-        guard let bundleId = app.bundleIdentifier, !seen.contains(bundleId) else { continue }
+        guard let bundleId = app.bundleIdentifier, !seen.contains(bundleId),
+              app.activationPolicy == .regular else { continue }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        var windowsRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
-        if let windows = windowsRef as? [AXUIElement], !windows.isEmpty {
+        let windows = getWindows(appElement: appElement)
+        if !windows.isEmpty {
             seen.insert(bundleId)
-            entries.append((bundleId: bundleId, name: app.localizedName ?? "Unknown"))
+            let appName = app.localizedName ?? "Unknown"
+            for w in windows {
+                entries.append((bundleId: bundleId, name: appName, title: w.title))
+            }
         }
     }
-    let sorted = entries.sorted(by: { $0.name.lowercased() < $1.name.lowercased() })
-    let maxWidth = sorted.map { $0.name.count }.max() ?? 0
-    for entry in sorted {
-        let padded = entry.name.padding(toLength: maxWidth, withPad: " ", startingAt: 0)
-        print("\(padded)  \(entry.bundleId)")
+    entries.sort(by: { $0.name.lowercased() < $1.name.lowercased() })
+    let maxName = max(entries.map { $0.name.count }.max() ?? 0, 4) // "APP"
+    let maxBundleId = max(entries.map { $0.bundleId.count }.max() ?? 0, 9) // "BUNDLE ID"
+    let headerName = "APP".padding(toLength: maxName, withPad: " ", startingAt: 0)
+    let headerBundleId = "BUNDLE ID".padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
+    print("\(headerName)  \(headerBundleId)  WINDOW TITLE")
+    for entry in entries {
+        let paddedName = entry.name.padding(toLength: maxName, withPad: " ", startingAt: 0)
+        let paddedBundleId = entry.bundleId.padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
+        print("\(paddedName)  \(paddedBundleId)  \(entry.title)")
     }
 }
 
