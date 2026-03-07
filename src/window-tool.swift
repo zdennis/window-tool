@@ -1,7 +1,7 @@
 import Cocoa
 import Foundation
 
-let VERSION = "0.5.0"
+let VERSION = "0.6.0"
 
 // MARK: - Configuration
 
