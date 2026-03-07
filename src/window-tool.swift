@@ -475,26 +475,45 @@ func infoCommand(bundleId: String, index: Int) {
     }
 }
 
+// MARK: - Layout Types
+
+struct WindowSnapshot: Codable {
+    let index: Int
+    let title: String
+    let x: Int
+    let y: Int
+    let width: Int
+    let height: Int
+}
+
+struct WindowLayout: Codable {
+    let bundleId: String
+    let windows: [WindowSnapshot]
+
+    enum CodingKeys: String, CodingKey {
+        case bundleId = "bundle_id"
+        case windows
+    }
+}
+
 /// Saves the current window layout for an application to a JSON file.
 func saveLayoutCommand(bundleId: String, filePath: String) {
     let app = requireApp(bundleId)
     let windows = getWindows(appElement: app)
-    let items = windows.map { w in
-        ["index": w.id, "title": w.title,
-         "x": Int(w.position.x), "y": Int(w.position.y),
-         "width": Int(w.size.width), "height": Int(w.size.height)] as [String: Any]
+    let snapshots = windows.map { w in
+        WindowSnapshot(index: w.id, title: w.title,
+                       x: Int(w.position.x), y: Int(w.position.y),
+                       width: Int(w.size.width), height: Int(w.size.height))
     }
-    let layout: [String: Any] = ["bundle_id": bundleId, "windows": items]
-    guard let data = try? JSONSerialization.data(withJSONObject: layout, options: [.prettyPrinted, .sortedKeys]) else {
-        fputs("Error: Failed to serialize layout\n", stderr)
-        exit(1)
-    }
-    let url = URL(fileURLWithPath: filePath)
+    let layout = WindowLayout(bundleId: bundleId, windows: snapshots)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     do {
-        try data.write(to: url)
+        let data = try encoder.encode(layout)
+        try data.write(to: URL(fileURLWithPath: filePath))
         print("Saved \(windows.count) window(s) to \(filePath)")
     } catch {
-        fputs("Error: Could not write to \(filePath): \(error.localizedDescription)\n", stderr)
+        fputs("Error: Could not write layout to \(filePath): \(error.localizedDescription)\n", stderr)
         exit(1)
     }
 }
@@ -502,30 +521,25 @@ func saveLayoutCommand(bundleId: String, filePath: String) {
 /// Restores window positions and sizes from a previously saved layout file.
 /// Matches windows by title. Windows that can't be matched are skipped.
 func restoreLayoutCommand(filePath: String) {
-    let url = URL(fileURLWithPath: filePath)
-    guard let data = try? Data(contentsOf: url),
-          let layout = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let bundleId = layout["bundle_id"] as? String,
-          let savedWindows = layout["windows"] as? [[String: Any]] else {
-        fputs("Error: Could not read layout from \(filePath)\n", stderr)
+    let layout: WindowLayout
+    do {
+        let data = try Data(contentsOf: URL(fileURLWithPath: filePath))
+        layout = try JSONDecoder().decode(WindowLayout.self, from: data)
+    } catch {
+        fputs("Error: Could not read layout from \(filePath): \(error.localizedDescription)\n", stderr)
         exit(1)
     }
-    let app = requireApp(bundleId)
+    let app = requireApp(layout.bundleId)
     let currentWindows = getWindows(appElement: app)
     var restored = 0
-    for saved in savedWindows {
-        guard let title = saved["title"] as? String,
-              let x = saved["x"] as? Int,
-              let y = saved["y"] as? Int,
-              let width = saved["width"] as? Int,
-              let height = saved["height"] as? Int else { continue }
-        if let match = currentWindows.first(where: { $0.title == title }) {
-            moveWindow(match.element, x: CGFloat(x), y: CGFloat(y))
-            resizeWindow(match.element, width: CGFloat(width), height: CGFloat(height))
+    for saved in layout.windows {
+        if let match = currentWindows.first(where: { $0.title == saved.title }) {
+            moveWindow(match.element, x: CGFloat(saved.x), y: CGFloat(saved.y))
+            resizeWindow(match.element, width: CGFloat(saved.width), height: CGFloat(saved.height))
             restored += 1
         }
     }
-    print("Restored \(restored)/\(savedWindows.count) window(s) for \(bundleId)")
+    print("Restored \(restored)/\(layout.windows.count) window(s) for \(layout.bundleId)")
 }
 
 /// Cascades all windows for an application, offsetting each by a fixed amount.
