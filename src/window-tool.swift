@@ -574,8 +574,16 @@ func watchCommand(bundleId: String, interval: Double) {
     }
 
     func printState(_ windows: [WindowState]) {
-        for (i, w) in windows.enumerated() {
-            print("\(i)\t\(w.x),\(w.y)\t\(w.width)x\(w.height)\t\(w.title)")
+        if config.jsonOutput {
+            let items = windows.enumerated().map { (i, w) in
+                ["index": i, "x": w.x, "y": w.y,
+                 "width": w.width, "height": w.height, "title": w.title] as [String: Any]
+            }
+            printJSON(items)
+        } else {
+            for (i, w) in windows.enumerated() {
+                print("\(i)\t\(w.x),\(w.y)\t\(w.width)x\(w.height)\t\(w.title)")
+            }
         }
     }
 
@@ -589,7 +597,7 @@ func watchCommand(bundleId: String, interval: Double) {
         Thread.sleep(forTimeInterval: interval)
         let current = snapshot()
         if current != previous {
-            print("---")
+            if !config.jsonOutput { print("---") }
             printState(current)
             fflush(stdout)
             previous = current
