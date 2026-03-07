@@ -72,6 +72,46 @@ func parseDouble(_ s: String, label: String) throws -> Double {
     return v
 }
 
+// MARK: - Color Parsing
+
+let validColors = ["red", "green", "blue", "yellow", "orange", "purple", "white", "cyan", "magenta"]
+
+func parseColor(_ name: String) throws -> NSColor {
+    switch name.lowercased() {
+    case "red": return .red
+    case "green": return .green
+    case "blue": return .blue
+    case "yellow": return .yellow
+    case "orange": return .orange
+    case "purple": return .purple
+    case "white": return .white
+    case "cyan": return .cyan
+    case "magenta": return .magenta
+    default:
+        throw WindowToolError.invalidArgument(value: name, label: "color (valid: \(validColors.joined(separator: ", ")))")
+    }
+}
+
+func parseFlashFlags(_ args: inout [String]) throws -> (color: NSColor, count: Int) {
+    var color = NSColor.green
+    var count = 1
+    if let colorIdx = args.firstIndex(of: "--color") {
+        guard colorIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
+        }
+        color = try parseColor(args[colorIdx + 1])
+        args.removeSubrange(colorIdx...colorIdx + 1)
+    }
+    if let countIdx = args.firstIndex(of: "--count") {
+        guard countIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--count", label: "flag (requires a value)")
+        }
+        count = try parseInt(args[countIdx + 1], label: "count")
+        args.removeSubrange(countIdx...countIdx + 1)
+    }
+    return (color, count)
+}
+
 // MARK: - Accessibility Helpers
 
 /// Resolves an app identifier to a bundle ID.
@@ -428,6 +468,59 @@ func shakeCommand(bundleId: String, selector: WindowSelector, offset: Int, count
         Thread.sleep(forTimeInterval: delay)
     }
     moveWindow(window.element, x: originalX, y: originalY)
+}
+
+/// Flashes a colored overlay on a window as a visual notification.
+func flashCommand(bundleId: String, selector: WindowSelector, color: NSColor, count: Int) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    let flippedY = mainScreenHeight - window.position.y - window.size.height
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let overlay = NSWindow(
+        contentRect: NSRect(x: window.position.x, y: flippedY,
+                            width: window.size.width, height: window.size.height),
+        styleMask: .borderless,
+        backing: .buffered,
+        defer: false
+    )
+    overlay.backgroundColor = color.withAlphaComponent(0.4)
+    overlay.isOpaque = false
+    overlay.level = .floating
+    overlay.ignoresMouseEvents = true
+    overlay.hasShadow = false
+
+    var remaining = count
+
+    func doFlash() {
+        overlay.alphaValue = 1.0
+        overlay.orderFront(nil)
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.4
+            overlay.animator().alphaValue = 0.0
+        }, completionHandler: {
+            remaining -= 1
+            if remaining > 0 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    doFlash()
+                }
+            } else {
+                overlay.close()
+                app.stop(nil)
+                let event = NSEvent.otherEvent(with: .applicationDefined,
+                    location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!
+                app.postEvent(event, atStart: true)
+            }
+        })
+    }
+
+    doFlash()
+    app.run()
 }
 
 /// Resizes window(s) without changing position.
@@ -798,6 +891,8 @@ func usage() {
       active-screen                            Print active screen bounds (x, y, width, height)
       columnize <w> <w> [<w>...] [--gap N]     Arrange windows side-by-side in columns
       count                                    Print number of windows
+      flash <window> [--color green] [--count 1]  Flash a colored overlay on a window
+      flash-by-title <pattern> [--color green] [--count 1]  Flash overlay by title match
       focus <window>                           Bring window to front
       focus-by-title <pattern>                 Bring window to front by title match
       fullscreen <window>                      Enter macOS fullscreen mode
@@ -891,7 +986,8 @@ let accessibilityCommands: Set<String> = [
     "save-layout", "restore-layout", "stack", "watch",
     "fullscreen", "fullscreen-by-title",
     "unfullscreen", "unfullscreen-by-title",
-    "focus", "focus-by-title", "shake", "shake-by-title",
+    "focus", "focus-by-title", "flash", "flash-by-title",
+    "shake", "shake-by-title",
     "list-open-windows"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
@@ -1110,6 +1206,24 @@ do {
         let count = args.count >= 4 ? try parseInt(args[3], label: "count") : 6
         let delay = args.count >= 5 ? try parseDouble(args[4], label: "delay") : 0.04
         try shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
+    case "flash":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool flash <index|id=N> [--color green] [--count 1]\n", stderr)
+            exit(1)
+        }
+        var flashArgs = Array(args.dropFirst())
+        let selector = try parseWindowSelector(flashArgs.removeFirst())
+        let flags = try parseFlashFlags(&flashArgs)
+        try flashCommand(bundleId: config.bundleId, selector: selector, color: flags.color, count: flags.count)
+    case "flash-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool flash-by-title <pattern> [--color green] [--count 1]\n", stderr)
+            exit(1)
+        }
+        var flashArgs = Array(args.dropFirst())
+        let pattern = flashArgs.removeFirst()
+        let flags = try parseFlashFlags(&flashArgs)
+        try flashCommand(bundleId: config.bundleId, selector: .byTitle(pattern), color: flags.color, count: flags.count)
     case "list-open-windows":
         listOpenWindowsCommand()
     case "screens":
