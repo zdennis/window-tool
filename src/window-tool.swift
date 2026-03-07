@@ -443,6 +443,18 @@ func maximizeCommand(bundleId: String, selector: WindowSelector) throws {
     }
 }
 
+/// Enters macOS fullscreen mode for a window.
+func fullscreenCommand(bundleId: String, selector: WindowSelector) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, true as CFTypeRef)
+}
+
+/// Exits macOS fullscreen mode for a window.
+func unfullscreenCommand(bundleId: String, selector: WindowSelector) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, false as CFTypeRef)
+}
+
 /// Moves a window to a different screen, placing it at the top-left of the visible area.
 func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex: Int) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
@@ -649,6 +661,8 @@ func usage() {
       count                                    Print number of windows
       focus <index>                            Bring window to front by index
       focus-by-title <pattern>                 Bring window to front by title match
+      fullscreen <index>                       Enter macOS fullscreen mode
+      fullscreen-by-title <pattern>            Enter fullscreen by title match
       info <index>                             Show detailed info for a window
       list                                     List all windows with index, position, size, and title
       list-open-windows                        List apps with open windows
@@ -671,6 +685,8 @@ func usage() {
       snap <index> <position>                  Snap window to screen region
       snap-by-title <pattern> <position>       Snap window to screen region by title
       stack [offset]                           Cascade windows with offset (default: 30)
+      unfullscreen <index>                     Exit macOS fullscreen mode
+      unfullscreen-by-title <pattern>          Exit fullscreen by title match
       watch [interval]                         Watch for window changes (default: 1.0s)
 
     Snap positions:
@@ -727,6 +743,8 @@ let accessibilityCommands: Set<String> = [
     "maximize", "maximize-by-title",
     "minimize", "minimize-by-title", "restore",
     "save-layout", "restore-layout", "stack", "watch",
+    "fullscreen", "fullscreen-by-title",
+    "unfullscreen", "unfullscreen-by-title",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -879,6 +897,30 @@ do {
             exit(1)
         }
         try focusCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
+    case "fullscreen":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool fullscreen <index>\n", stderr)
+            exit(1)
+        }
+        try fullscreenCommand(bundleId: config.bundleId, selector: .byIndex(try parseInt(args[1], label: "index")))
+    case "fullscreen-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool fullscreen-by-title <pattern>\n", stderr)
+            exit(1)
+        }
+        try fullscreenCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
+    case "unfullscreen":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool unfullscreen <index>\n", stderr)
+            exit(1)
+        }
+        try unfullscreenCommand(bundleId: config.bundleId, selector: .byIndex(try parseInt(args[1], label: "index")))
+    case "unfullscreen-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool unfullscreen-by-title <pattern>\n", stderr)
+            exit(1)
+        }
+        try unfullscreenCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "shake":
         guard args.count >= 2 else {
             fputs("Usage: window-tool shake <index> [offset] [count] [delay]\n", stderr)
