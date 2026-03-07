@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import ScreenCaptureKit
 
 let VERSION = "0.6.0"
 
@@ -944,6 +945,87 @@ func infoCommand(bundleId: String, selector: WindowSelector) throws {
     }
 }
 
+// MARK: - Preview Command
+
+func captureWindowImage(windowID: CGWindowID) throws -> CGImage {
+    NSApplication.shared.setActivationPolicy(.accessory)
+    let semaphore = DispatchSemaphore(value: 0)
+    var capturedImage: CGImage?
+    var captureError: (any Error)?
+
+    Task {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            guard let scWindow = content.windows.first(where: { $0.windowID == windowID }) else {
+                captureError = WindowToolError.noWindowMatchingID(windowID)
+                semaphore.signal()
+                return
+            }
+            let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+            let config = SCStreamConfiguration()
+            config.captureResolution = .best
+            config.showsCursor = false
+            capturedImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        } catch {
+            captureError = error
+        }
+        semaphore.signal()
+    }
+
+    semaphore.wait()
+
+    if let error = captureError { throw error }
+    guard let image = capturedImage else {
+        fputs("Error: Failed to capture window image\n", stderr)
+        exit(1)
+    }
+    return image
+}
+
+func parsePreviewFlags(_ args: [String]) throws -> String? {
+    guard let outIdx = args.firstIndex(of: "--output") else { return nil }
+    guard outIdx + 1 < args.count else {
+        throw WindowToolError.invalidArgument(value: "--output", label: "flag (requires a file path)")
+    }
+    return args[outIdx + 1]
+}
+
+func previewCommand(bundleId: String, selector: WindowSelector, outputPath: String?) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    guard let windowID = window.windowID else {
+        fputs("Error: Cannot capture window — no window ID available\n", stderr)
+        exit(1)
+    }
+
+    let image = try captureWindowImage(windowID: windowID)
+
+    let bitmap = NSBitmapImageRep(cgImage: image)
+    guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+        fputs("Error: Failed to encode PNG\n", stderr)
+        exit(1)
+    }
+
+    let resolvedPath: String
+    if let path = outputPath {
+        resolvedPath = (path as NSString).expandingTildeInPath
+    } else {
+        resolvedPath = "/tmp/window-tool-preview-\(windowID).png"
+    }
+    let url = URL(fileURLWithPath: resolvedPath)
+    try pngData.write(to: url)
+
+    if config.jsonOutput {
+        printJSON([
+            "path": url.path,
+            "window_id": Int(windowID),
+            "width": image.width,
+            "height": image.height
+        ])
+    } else {
+        print(url.path)
+    }
+}
+
 // MARK: - Layout Types
 
 struct WindowSnapshot: Codable {
@@ -1133,6 +1215,8 @@ func usage() {
       move-by-title <pattern> <x> <y> [<w> <h>]  Move/resize windows matching title
       move-to-screen <window> <screen>         Move window to a different display
       move-to-screen-by-title <pattern> <screen>  Move window to display by title
+      preview <window> [--output <path>]       Capture a window screenshot as PNG
+      preview-by-title <pattern> [--output <path>]  Capture window screenshot by title
       resize <window> <width> <height>         Resize window
       resize-by-title <pattern> <width> <height>  Resize windows matching title
       restore                                  Restore all minimized windows
@@ -1219,6 +1303,7 @@ let accessibilityCommands: Set<String> = [
     "shake", "shake-by-title",
     "highlight", "highlight-by-title",
     "dim", "dim-by-title",
+    "preview", "preview-by-title",
     "list-open-windows"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
@@ -1487,6 +1572,24 @@ do {
         try dimCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), opacity: dimFlags.opacity, duration: dimFlags.duration)
     case "undim":
         try undimCommand()
+    case "preview":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool preview <index|id=N> [--output <path>]\n", stderr)
+            exit(1)
+        }
+        var previewArgs = Array(args.dropFirst())
+        let previewSelector = try parseWindowSelector(previewArgs.removeFirst())
+        let outputPath = try parsePreviewFlags(previewArgs)
+        try previewCommand(bundleId: config.bundleId, selector: previewSelector, outputPath: outputPath)
+    case "preview-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool preview-by-title <pattern> [--output <path>]\n", stderr)
+            exit(1)
+        }
+        var previewArgs = Array(args.dropFirst())
+        let pattern = previewArgs.removeFirst()
+        let outputPath = try parsePreviewFlags(previewArgs)
+        try previewCommand(bundleId: config.bundleId, selector: .byTitle(pattern), outputPath: outputPath)
     case "list-open-windows":
         listOpenWindowsCommand()
     case "screens":
