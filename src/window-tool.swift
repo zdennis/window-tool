@@ -11,10 +11,12 @@ struct Config {
 var config = Config()
 
 func printJSON(_ value: Any) {
-    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
-       let str = String(data: data, encoding: .utf8) {
-        print(str)
+    guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+          let str = String(data: data, encoding: .utf8) else {
+        fputs("Error: Failed to serialize JSON output\n", stderr)
+        exit(1)
     }
+    print(str)
 }
 
 // MARK: - Argument Parsing Helpers
@@ -639,19 +641,19 @@ func usage() {
       restore                                  Restore all minimized windows
       save-layout <file>                       Save window layout to a JSON file
       restore-layout <file>                    Restore window layout from a JSON file
-      stack [offset]                           Cascade windows with offset (default: 30)
-      watch [interval]                         Watch for window changes (default: 1.0s)
-
-    Snap positions:
-      left, right, top, bottom, top-left, top-right,
-      bottom-left, bottom-right, center, maximize
       focus <index>                             Bring window to front by index
       focus-by-title <pattern>                 Bring window to front by title match
       shake <index> [offset] [count] [delay]   Shake a window by index
       shake-by-title <pattern> [offset] [count] [delay]  Shake a window by title match
-      list-open-windows                        List bundle IDs of apps with open windows
+      stack [offset]                           Cascade windows with offset (default: 30)
+      watch [interval]                         Watch for window changes (default: 1.0s)
+      list-open-windows                        List apps with open windows
       screens                                  List all displays with bounds
       active-screen                            Print active screen bounds (x, y, width, height)
+
+    Snap positions:
+      left, right, top, bottom, top-left, top-right,
+      bottom-left, bottom-right, center, maximize
 
     Options:
       --app <bundle-id>   Target application (default: com.googlecode.iterm2)
