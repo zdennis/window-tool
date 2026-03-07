@@ -31,9 +31,11 @@ if [ "$(current_branch)" != "main" ]; then
   exit 1
 fi
 
-# Ensure working tree is clean
-if [ -n "$(git status --porcelain)" ]; then
-  echo "Error: Working tree is not clean. Commit or stash changes first." >&2
+# Ensure no uncommitted changes to tracked files (untracked files are ignored)
+if git diff --quiet && git diff --cached --quiet; then
+  : # clean
+else
+  echo "Error: Working tree has uncommitted changes. Commit or stash changes first." >&2
   exit 1
 fi
 
