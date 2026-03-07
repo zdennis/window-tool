@@ -134,6 +134,24 @@ func parseHighlightFlags(_ args: [String]) throws -> (color: NSColor, duration: 
     return (color, duration)
 }
 
+func parseBorderFlags(_ args: [String]) throws -> (color: NSColor, width: CGFloat) {
+    var color: NSColor = .blue
+    var width: CGFloat = 3
+    if let colorIdx = args.firstIndex(of: "--color") {
+        guard colorIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
+        }
+        color = try parseColor(args[colorIdx + 1])
+    }
+    if let widthIdx = args.firstIndex(of: "--width") {
+        guard widthIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--width", label: "flag (requires a value)")
+        }
+        width = CGFloat(try parseDouble(args[widthIdx + 1], label: "width"))
+    }
+    return (color, width)
+}
+
 // MARK: - Accessibility Helpers
 
 /// Resolves an app identifier to a bundle ID.
@@ -745,6 +763,156 @@ func undimCommand() throws {
     }
 }
 
+// MARK: - Border Overlay
+
+let borderPidDir = "/tmp/window-tool-borders"
+
+class BorderView: NSView {
+    var borderColor: NSColor = .blue
+    var borderWidth: CGFloat = 3
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(rect: bounds.insetBy(dx: borderWidth / 2, dy: borderWidth / 2))
+        path.lineWidth = borderWidth
+        borderColor.setStroke()
+        path.stroke()
+    }
+}
+
+func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, width: CGFloat) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    guard let windowID = window.windowID else {
+        fputs("Error: Could not determine window ID\n", stderr)
+        exit(1)
+    }
+
+    let appBundleDir = "\(borderPidDir)/\(bundleId)"
+    try FileManager.default.createDirectory(atPath: appBundleDir, withIntermediateDirectories: true)
+    let pidFile = "\(appBundleDir)/\(windowID).pid"
+
+    if let existingPid = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+       let pid = Int32(existingPid) {
+        kill(pid, SIGTERM)
+        usleep(200_000)
+    }
+
+    try "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: pidFile, atomically: true, encoding: .utf8)
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    let cocoaY = mainScreenHeight - window.position.y - window.size.height
+    let overlayFrame = NSRect(x: window.position.x, y: cocoaY,
+                              width: window.size.width, height: window.size.height)
+
+    let overlay = NSWindow(contentRect: overlayFrame,
+                           styleMask: .borderless,
+                           backing: .buffered,
+                           defer: false)
+    overlay.isOpaque = false
+    overlay.backgroundColor = .clear
+    overlay.level = .floating
+    overlay.ignoresMouseEvents = true
+    overlay.hasShadow = false
+
+    let view = BorderView(frame: NSRect(origin: .zero, size: overlayFrame.size))
+    view.borderColor = color
+    view.borderWidth = width
+    overlay.contentView = view
+    overlay.orderFrontRegardless()
+
+    func cleanupAndExit() {
+        overlay.close()
+        try? FileManager.default.removeItem(atPath: pidFile)
+        app.stop(nil)
+        let event = NSEvent.otherEvent(with: .applicationDefined,
+            location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!
+        app.postEvent(event, atStart: true)
+    }
+
+    signal(SIGTERM, SIG_IGN)
+    let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    termSource.setEventHandler { cleanupAndExit() }
+    termSource.resume()
+
+    signal(SIGINT, SIG_IGN)
+    let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    intSource.setEventHandler { cleanupAndExit() }
+    intSource.resume()
+
+    Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+        guard let appElement = getAppElement(bundleId: bundleId) else {
+            timer.invalidate()
+            cleanupAndExit()
+            return
+        }
+        let windows = getWindows(appElement: appElement)
+        guard let w = windows.first(where: { $0.windowID == windowID }) else {
+            timer.invalidate()
+            cleanupAndExit()
+            return
+        }
+
+        let screenHeight = NSScreen.screens[0].frame.height
+        let newCocoaY = screenHeight - w.position.y - w.size.height
+        let newFrame = NSRect(x: w.position.x, y: newCocoaY,
+                              width: w.size.width, height: w.size.height)
+        if overlay.frame != newFrame {
+            overlay.setFrame(newFrame, display: false)
+            view.frame = NSRect(origin: .zero, size: newFrame.size)
+            view.needsDisplay = true
+        }
+    }
+
+    app.run()
+    try? FileManager.default.removeItem(atPath: pidFile)
+}
+
+func unborderCommand(bundleId: String, selector: WindowSelector? = nil) {
+    let appDir = "\(borderPidDir)/\(bundleId)"
+
+    if let selector = selector {
+        guard let window = try? resolveWindow(bundleId: bundleId, selector: selector),
+              let windowID = window.windowID else {
+            return
+        }
+        let pidFile = "\(appDir)/\(windowID).pid"
+        if let content = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let pid = Int32(content) {
+            kill(pid, SIGTERM)
+        }
+        try? FileManager.default.removeItem(atPath: pidFile)
+        if let remaining = try? FileManager.default.contentsOfDirectory(atPath: appDir), remaining.isEmpty {
+            try? FileManager.default.removeItem(atPath: appDir)
+        }
+        return
+    }
+
+    guard let files = try? FileManager.default.contentsOfDirectory(atPath: appDir) else {
+        return
+    }
+    for file in files where file.hasSuffix(".pid") {
+        let pidFile = "\(appDir)/\(file)"
+        if let content = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let pid = Int32(content) {
+            kill(pid, SIGTERM)
+        }
+        try? FileManager.default.removeItem(atPath: pidFile)
+    }
+    try? FileManager.default.removeItem(atPath: appDir)
+}
+
+func unborderAllCommand() {
+    guard let bundleDirs = try? FileManager.default.contentsOfDirectory(atPath: borderPidDir) else {
+        return
+    }
+    for bundleDir in bundleDirs {
+        unborderCommand(bundleId: bundleDir)
+    }
+}
+
 /// Resizes window(s) without changing position.
 func resizeCommand(bundleId: String, selector: WindowSelector, width: CGFloat, height: CGFloat) throws {
     let windows = try resolveAllWindows(bundleId: bundleId, selector: selector)
@@ -1202,8 +1370,10 @@ func usage() {
       focus-by-title <pattern>                 Bring window to front by title match
       fullscreen <window>                      Enter macOS fullscreen mode
       fullscreen-by-title <pattern>            Enter fullscreen by title match
-      highlight <window> [--color C] [--duration S]  Draw a colored border around a window
-      highlight-by-title <pattern> [--color C] [--duration S]  Highlight by title match
+      border <window> [--color blue] [--width 3]    Add a persistent border that tracks a window
+      border-by-title <pattern> [--color blue] [--width 3]  Persistent border by title match
+      highlight <window> [--color C] [--duration S]  Briefly highlight a window (auto-dismisses)
+      highlight-by-title <pattern> [--color C] [--duration S]  Brief highlight by title match
       info <window>                            Show detailed info for a window
       list                                     List all windows with index, window ID, position, size, and title
       list-open-windows                        List apps with open windows
@@ -1228,6 +1398,9 @@ func usage() {
       snap <window> <position>                 Snap window to screen region
       snap-by-title <pattern> <position>       Snap window to screen region by title
       stack [offset]                           Cascade windows with offset (default: 30)
+      unborder [<window>]                          Remove borders for target app (or one window)
+      unborder-by-title <pattern>                Remove border by title match
+      unborder-all                               Remove all active borders
       undim                                    Remove active dim overlay
       unfullscreen <window>                     Exit macOS fullscreen mode
       unfullscreen-by-title <pattern>          Exit fullscreen by title match
@@ -1302,12 +1475,13 @@ let accessibilityCommands: Set<String> = [
     "focus", "focus-by-title", "flash", "flash-by-title",
     "shake", "shake-by-title",
     "highlight", "highlight-by-title",
+    "border", "border-by-title", "unborder", "unborder-by-title",
     "dim", "dim-by-title",
     "preview", "preview-by-title",
     "list-open-windows"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["screens", "active-screen", "list-open-windows", "undim", "help", "--help", "-h"]
+let appIndependentCommands: Set<String> = ["screens", "active-screen", "list-open-windows", "undim", "unborder-all", "help", "--help", "-h"]
 
 do {
     if accessibilityCommands.contains(command) {
@@ -1555,6 +1729,36 @@ do {
         }
         let hlFlags = try parseHighlightFlags(Array(args.dropFirst()))
         try highlightCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), color: hlFlags.color, duration: hlFlags.duration)
+    case "border":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool border <window> [--color <color>] [--width <pixels>]\n", stderr)
+            exit(1)
+        }
+        let selector = try parseWindowSelector(args[1])
+        let borderFlags = try parseBorderFlags(Array(args.dropFirst()))
+        try borderCommand(bundleId: config.bundleId, selector: selector, color: borderFlags.color, width: borderFlags.width)
+    case "border-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool border-by-title <pattern> [--color <color>] [--width <pixels>]\n", stderr)
+            exit(1)
+        }
+        let borderFlags = try parseBorderFlags(Array(args.dropFirst()))
+        try borderCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), color: borderFlags.color, width: borderFlags.width)
+    case "unborder":
+        if args.count >= 2 {
+            let selector = try parseWindowSelector(args[1])
+            unborderCommand(bundleId: config.bundleId, selector: selector)
+        } else {
+            unborderCommand(bundleId: config.bundleId)
+        }
+    case "unborder-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool unborder-by-title <pattern>\n", stderr)
+            exit(1)
+        }
+        unborderCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
+    case "unborder-all":
+        unborderAllCommand()
     case "dim":
         guard args.count >= 2 else {
             fputs("Usage: window-tool dim <window> [--opacity 0.5] [--duration 0]\n", stderr)
