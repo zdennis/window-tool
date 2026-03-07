@@ -600,6 +600,65 @@ func infoCommand(bundleId: String, index: Int) {
     }
 }
 
+/// Saves the current window layout for an application to a JSON file.
+func saveLayoutCommand(bundleId: String, filePath: String) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    let items = windows.map { w in
+        ["index": w.id, "title": w.title,
+         "x": Int(w.position.x), "y": Int(w.position.y),
+         "width": Int(w.size.width), "height": Int(w.size.height)] as [String: Any]
+    }
+    let layout: [String: Any] = ["bundle_id": bundleId, "windows": items]
+    guard let data = try? JSONSerialization.data(withJSONObject: layout, options: [.prettyPrinted, .sortedKeys]) else {
+        fputs("Error: Failed to serialize layout\n", stderr)
+        exit(1)
+    }
+    let url = URL(fileURLWithPath: filePath)
+    do {
+        try data.write(to: url)
+        print("Saved \(windows.count) window(s) to \(filePath)")
+    } catch {
+        fputs("Error: Could not write to \(filePath): \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}
+
+/// Restores window positions and sizes from a previously saved layout file.
+/// Matches windows by title. Windows that can't be matched are skipped.
+func restoreLayoutCommand(filePath: String) {
+    let url = URL(fileURLWithPath: filePath)
+    guard let data = try? Data(contentsOf: url),
+          let layout = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let bundleId = layout["bundle_id"] as? String,
+          let savedWindows = layout["windows"] as? [[String: Any]] else {
+        fputs("Error: Could not read layout from \(filePath)\n", stderr)
+        exit(1)
+    }
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let currentWindows = getWindows(appElement: app)
+    var restored = 0
+    for saved in savedWindows {
+        guard let title = saved["title"] as? String,
+              let x = saved["x"] as? Int,
+              let y = saved["y"] as? Int,
+              let width = saved["width"] as? Int,
+              let height = saved["height"] as? Int else { continue }
+        if let match = currentWindows.first(where: { $0.title == title }) {
+            moveWindow(match.element, x: CGFloat(x), y: CGFloat(y))
+            resizeWindow(match.element, width: CGFloat(width), height: CGFloat(height))
+            restored += 1
+        }
+    }
+    print("Restored \(restored)/\(savedWindows.count) window(s) for \(bundleId)")
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -632,6 +691,8 @@ func usage() {
       minimize <index>                         Minimize a window by index
       minimize-by-title <pattern>              Minimize a window by title match
       restore                                  Restore all minimized windows
+      save-layout <file>                       Save window layout to a JSON file
+      restore-layout <file>                    Restore window layout from a JSON file
 
     Snap positions:
       left, right, top, bottom, top-left, top-right,
@@ -683,6 +744,7 @@ let accessibilityCommands: Set<String> = [
     "snap", "snap-by-title",
     "move-to-screen", "move-to-screen-by-title",
     "minimize", "minimize-by-title", "restore",
+    "save-layout", "restore-layout",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -784,6 +846,18 @@ case "minimize-by-title":
     minimizeByTitleCommand(bundleId: bundleId, titlePattern: args[1])
 case "restore":
     restoreCommand(bundleId: bundleId)
+case "save-layout":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool save-layout <file>\n", stderr)
+        exit(1)
+    }
+    saveLayoutCommand(bundleId: bundleId, filePath: args[1])
+case "restore-layout":
+    guard args.count >= 2 else {
+        fputs("Usage: window-tool restore-layout <file>\n", stderr)
+        exit(1)
+    }
+    restoreLayoutCommand(filePath: args[1])
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
