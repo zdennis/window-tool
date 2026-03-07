@@ -333,6 +333,94 @@ func resizeByTitleCommand(bundleId: String, titlePattern: String, width: CGFloat
     print("Resized \(matching.count) window(s) matching '\(titlePattern)'")
 }
 
+/// Returns the visible frame of the screen containing the given window, converted to top-left origin.
+func screenBoundsForWindow(_ window: WindowInfo) -> (x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {
+    let windowCenter = NSPoint(x: window.position.x + window.size.width / 2,
+                                y: window.position.y + window.size.height / 2)
+    // NSScreen uses bottom-left origin; convert window center for lookup
+    let mainHeight = NSScreen.screens[0].frame.height
+    let flippedCenter = NSPoint(x: windowCenter.x, y: mainHeight - windowCenter.y)
+    let screen = NSScreen.screens.first { $0.frame.contains(flippedCenter) } ?? NSScreen.main ?? NSScreen.screens[0]
+    let frame = screen.frame
+    let visible = screen.visibleFrame
+    let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
+    return (x: visible.origin.x, y: topLeftY, width: visible.width, height: visible.height)
+}
+
+let snapPositions = ["left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right", "center", "maximize"]
+
+/// Snaps a window to a named screen region by index.
+func snapCommand(bundleId: String, index: Int, position: String) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard index >= 0 && index < windows.count else {
+        fputs("Error: Window index \(index) out of range (0..\(windows.count - 1))\n", stderr)
+        exit(1)
+    }
+    let window = windows[index]
+    snapWindow(window, position: position)
+}
+
+/// Snaps the first window matching a title pattern to a named screen region.
+func snapByTitleCommand(bundleId: String, titlePattern: String, position: String) {
+    guard let app = getAppElement(bundleId: bundleId) else {
+        fputs("Error: Application not found: \(bundleId)\n", stderr)
+        exit(1)
+    }
+    let windows = getWindows(appElement: app)
+    guard let window = windows.first(where: { $0.title.contains(titlePattern) }) else {
+        fputs("Error: No window found matching '\(titlePattern)'\n", stderr)
+        exit(1)
+    }
+    snapWindow(window, position: position)
+}
+
+func snapWindow(_ window: WindowInfo, position: String) {
+    let s = screenBoundsForWindow(window)
+    let halfW = s.width / 2
+    let halfH = s.height / 2
+
+    switch position {
+    case "left":
+        moveWindow(window.element, x: s.x, y: s.y)
+        resizeWindow(window.element, width: halfW, height: s.height)
+    case "right":
+        moveWindow(window.element, x: s.x + halfW, y: s.y)
+        resizeWindow(window.element, width: halfW, height: s.height)
+    case "top":
+        moveWindow(window.element, x: s.x, y: s.y)
+        resizeWindow(window.element, width: s.width, height: halfH)
+    case "bottom":
+        moveWindow(window.element, x: s.x, y: s.y + halfH)
+        resizeWindow(window.element, width: s.width, height: halfH)
+    case "top-left":
+        moveWindow(window.element, x: s.x, y: s.y)
+        resizeWindow(window.element, width: halfW, height: halfH)
+    case "top-right":
+        moveWindow(window.element, x: s.x + halfW, y: s.y)
+        resizeWindow(window.element, width: halfW, height: halfH)
+    case "bottom-left":
+        moveWindow(window.element, x: s.x, y: s.y + halfH)
+        resizeWindow(window.element, width: halfW, height: halfH)
+    case "bottom-right":
+        moveWindow(window.element, x: s.x + halfW, y: s.y + halfH)
+        resizeWindow(window.element, width: halfW, height: halfH)
+    case "center":
+        let w = window.size.width
+        let h = window.size.height
+        moveWindow(window.element, x: s.x + (s.width - w) / 2, y: s.y + (s.height - h) / 2)
+    case "maximize":
+        moveWindow(window.element, x: s.x, y: s.y)
+        resizeWindow(window.element, width: s.width, height: s.height)
+    default:
+        fputs("Error: Unknown snap position '\(position)'. Valid: \(snapPositions.joined(separator: ", "))\n", stderr)
+        exit(1)
+    }
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -357,6 +445,12 @@ func usage() {
       move-by-title <pattern> <x> <y> [<width> <height>]  Move/resize windows matching title
       resize <index> <width> <height>          Resize window by index
       resize-by-title <pattern> <width> <height>  Resize windows matching title
+      snap <index> <position>                  Snap window to screen region
+      snap-by-title <pattern> <position>       Snap window to screen region by title
+
+    Snap positions:
+      left, right, top, bottom, top-left, top-right,
+      bottom-left, bottom-right, center, maximize
       focus <index>                             Bring window to front by index
       focus-by-title <pattern>                 Bring window to front by title match
       shake <index> [offset] [count] [delay]   Shake a window by index
@@ -394,6 +488,7 @@ guard let command = args.first else {
 let accessibilityCommands: Set<String> = [
     "list", "count", "move", "move-by-title",
     "resize", "resize-by-title",
+    "snap", "snap-by-title",
     "focus", "focus-by-title", "shake", "shake-by-title",
     "list-open-windows"
 ]
@@ -451,6 +546,18 @@ case "resize-by-title":
         exit(1)
     }
     resizeByTitleCommand(bundleId: bundleId, titlePattern: args[1], width: CGFloat(Double(args[2])!), height: CGFloat(Double(args[3])!))
+case "snap":
+    guard args.count >= 3 else {
+        fputs("Usage: window-tool snap <index> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
+        exit(1)
+    }
+    snapCommand(bundleId: bundleId, index: Int(args[1])!, position: args[2])
+case "snap-by-title":
+    guard args.count >= 3 else {
+        fputs("Usage: window-tool snap-by-title <pattern> <position>\nPositions: \(snapPositions.joined(separator: ", "))\n", stderr)
+        exit(1)
+    }
+    snapByTitleCommand(bundleId: bundleId, titlePattern: args[1], position: args[2])
 case "focus":
     guard args.count >= 2 else {
         fputs("Usage: window-tool focus <index>\n", stderr)
