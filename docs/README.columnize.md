@@ -5,14 +5,14 @@ Arrange windows side-by-side in non-overlapping columns.
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] columnize <index> <index> [<index>...] [--gap N]
+window-tool [--app <name-or-id>] columnize <window> <window> [<window>...] [--gap N]
 ```
 
 ## Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<index>` | Yes (2+) | Window indices to arrange (from `list`) |
+| `<window>` | Yes (2+) | Window selectors to arrange: index, `id=<N>`, or `title=<pattern>` |
 
 ## Options
 
@@ -29,5 +29,5 @@ Arranges the specified windows in equal-width columns across the visible screen 
 ```sh
 window-tool columnize 0 1
 window-tool columnize 0 1 2 --gap 20
-window-tool --app com.apple.Safari columnize 0 1 2
+window-tool --app Safari columnize 0 1 2
 ```

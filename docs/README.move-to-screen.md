@@ -1,20 +1,18 @@
-# window-tool move-to-screen / move-to-screen-by-title
+# window-tool move-to-screen
 
-Move a window to a different display by index or title.
+Move a window to a different display.
 
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] move-to-screen <index> <screen>
-window-tool [--app <bundle-id>] move-to-screen-by-title <pattern> <screen>
+window-tool [--app <name-or-id>] move-to-screen <window> <screen>
 ```
 
 ## Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<index>` | Yes (move-to-screen) | Window index (from `list`) |
-| `<pattern>` | Yes (move-to-screen-by-title) | Substring to match against window titles |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
 | `<screen>` | Yes | Target screen index (from `screens`) |
 
 ## Details
@@ -25,5 +23,5 @@ Moves the window to the top-left of the visible area on the target screen. Use `
 
 ```sh
 window-tool move-to-screen 0 1
-window-tool move-to-screen-by-title "Terminal" 0
+window-tool move-to-screen title="Terminal" 0
 ```

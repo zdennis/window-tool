@@ -1,30 +1,28 @@
-# window-tool maximize / maximize-by-title
+# window-tool maximize
 
 Maximize a window to fill the visible screen area.
 
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] maximize <index>
-window-tool [--app <bundle-id>] maximize-by-title <pattern>
+window-tool [--app <name-or-id>] maximize <window>
 ```
 
 ## Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<index>` | Yes (maximize) | Window index (from `list`) |
-| `<pattern>` | Yes (maximize-by-title) | Substring to match against window titles |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
 
 ## Details
 
-Moves and resizes the window to fill the visible screen area (excluding menu bar and dock) on whichever screen the window currently occupies. `maximize-by-title` operates on all matching windows.
+Moves and resizes the window to fill the visible screen area (excluding menu bar and dock) on whichever screen the window currently occupies. When using `title=<pattern>`, operates on all matching windows.
 
-This is not macOS fullscreen mode — see `fullscreen` for that.
+This is not macOS fullscreen mode -- see `fullscreen` for that.
 
 ## Examples
 
 ```sh
 window-tool maximize 0
-window-tool maximize-by-title "Terminal"
+window-tool maximize title="Terminal"
 ```

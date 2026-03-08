@@ -1,20 +1,18 @@
-# window-tool move / move-by-title
+# window-tool move
 
-Move and optionally resize a window by index or title.
+Move and optionally resize a window.
 
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] move <index> <x> <y> [<width> <height>]
-window-tool [--app <bundle-id>] move-by-title <pattern> <x> <y> [<width> <height>]
+window-tool [--app <name-or-id>] move <window> <x> <y> [<width> <height>]
 ```
 
 ## Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<index>` | Yes (move) | Window index (from `list`) |
-| `<pattern>` | Yes (move-by-title) | Substring to match against window titles |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
 | `<x>` | Yes | Target x position |
 | `<y>` | Yes | Target y position |
 | `<width>` | No | New width (must be paired with height) |
@@ -22,14 +20,13 @@ window-tool [--app <bundle-id>] move-by-title <pattern> <x> <y> [<width> <height
 
 ## Details
 
-`move` operates on a single window by index. `move-by-title` operates on all windows whose title contains the given pattern.
-
-If width and height are omitted, only the position changes. If provided, the window is both moved and resized.
+If width and height are omitted, only the position changes. If provided, the window is both moved and resized. When using `title=<pattern>`, operates on all matching windows.
 
 ## Examples
 
 ```sh
 window-tool move 0 100 50
 window-tool move 0 100 50 1200 900
-window-tool move-by-title "my-notes" 0 0 1400 1000
+window-tool move title="my-notes" 0 0 1400 1000
+window-tool move id=1341 100 50
 ```

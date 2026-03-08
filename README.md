@@ -38,43 +38,43 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 | Command | Docs | Description |
 |---------|------|-------------|
 | `active-screen` | [README](docs/README.active-screen.md) | Print active screen bounds |
+| `active-window` | [README](docs/README.active-window.md) | Print info about the frontmost window |
+| `border` | [README](docs/README.border.md) | Add a persistent border that tracks a window |
 | `columnize` | [README](docs/README.columnize.md) | Arrange windows side-by-side in columns |
 | `count` | [README](docs/README.count.md) | Print number of windows |
-| `focus` | [README](docs/README.focus.md) | Bring window to front by index |
-| `focus-by-title` | [README](docs/README.focus.md) | Bring window to front by title match |
+| `dim` | [README](docs/README.dim.md) | Dim everything except a window |
+| `flash` | [README](docs/README.flash.md) | Flash a colored overlay on a window |
+| `focus` | [README](docs/README.focus.md) | Bring a window to front |
 | `fullscreen` | [README](docs/README.fullscreen.md) | Enter macOS fullscreen mode |
-| `fullscreen-by-title` | [README](docs/README.fullscreen.md) | Enter fullscreen by title match |
+| `highlight` | [README](docs/README.highlight.md) | Briefly highlight a window with a border |
 | `info` | [README](docs/README.info.md) | Show detailed info for a window |
-| `list` | [README](docs/README.list.md) | List all windows with index, position, size, and title |
-| `list-open-windows` | [README](docs/README.list-open-windows.md) | List apps with open windows |
-| `maximize` | [README](docs/README.maximize.md) | Maximize window to fill screen |
-| `maximize-by-title` | [README](docs/README.maximize.md) | Maximize windows matching title |
-| `minimize` | [README](docs/README.minimize.md) | Minimize a window by index |
-| `minimize-by-title` | [README](docs/README.minimize.md) | Minimize a window by title match |
-| `move` | [README](docs/README.move.md) | Move/resize window by index |
-| `move-by-title` | [README](docs/README.move.md) | Move/resize windows matching title |
-| `move-to-screen` | [README](docs/README.move-to-screen.md) | Move window to a different display |
-| `move-to-screen-by-title` | [README](docs/README.move-to-screen.md) | Move window to display by title |
-| `resize` | [README](docs/README.resize.md) | Resize window by index |
-| `resize-by-title` | [README](docs/README.resize.md) | Resize windows matching title |
+| `list` | [README](docs/README.list.md) | List windows (all apps, or one app with --app) |
+| `maximize` | [README](docs/README.maximize.md) | Maximize a window to fill screen |
+| `minimize` | [README](docs/README.minimize.md) | Minimize a window |
+| `move` | [README](docs/README.move.md) | Move/resize a window |
+| `move-to-screen` | [README](docs/README.move-to-screen.md) | Move a window to a different display |
+| `preview` | [README](docs/README.preview.md) | Capture a window screenshot as PNG |
+| `record` | [README](docs/README.record.md) | Record video of a window |
+| `resize` | [README](docs/README.resize.md) | Resize a window |
 | `restore` | [README](docs/README.restore.md) | Restore all minimized windows |
 | `restore-layout` | [README](docs/README.restore-layout.md) | Restore window layout from a JSON file |
 | `save-layout` | [README](docs/README.save-layout.md) | Save window layout to a JSON file |
 | `screens` | [README](docs/README.screens.md) | List all displays with bounds |
-| `shake` | [README](docs/README.shake.md) | Shake a window by index |
-| `shake-by-title` | [README](docs/README.shake.md) | Shake a window by title match |
-| `snap` | [README](docs/README.snap.md) | Snap window to screen region |
-| `snap-by-title` | [README](docs/README.snap.md) | Snap window to screen region by title |
+| `shake` | [README](docs/README.shake.md) | Shake a window to draw attention |
+| `shell-init` | [README](docs/README.shell-init.md) | Print shell integration snippet |
+| `snap` | [README](docs/README.snap.md) | Snap a window to a screen region |
 | `stack` | [README](docs/README.stack.md) | Cascade windows with offset |
+| `unborder` | [README](docs/README.unborder.md) | Remove border overlays for an app |
+| `unborder-all` | [README](docs/README.unborder-all.md) | Remove all active borders |
+| `undim` | [README](docs/README.undim.md) | Remove active dim overlay |
 | `unfullscreen` | [README](docs/README.unfullscreen.md) | Exit macOS fullscreen mode |
-| `unfullscreen-by-title` | [README](docs/README.unfullscreen.md) | Exit fullscreen by title match |
 | `watch` | [README](docs/README.watch.md) | Watch for window changes |
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
-| `--app <bundle-id>` | Target application bundle ID (default: `com.googlecode.iterm2`) |
+| `--app <name-or-id>` | Target application by name or bundle ID (default: `com.googlecode.iterm2`) |
 | `--json` | Output in JSON format |
 | `--version`, `-v` | Print version and exit |
 

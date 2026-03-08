@@ -1,20 +1,18 @@
-# window-tool unfullscreen / unfullscreen-by-title
+# window-tool unfullscreen
 
-Exit macOS fullscreen mode for a window by index or title.
+Exit macOS fullscreen mode for a window.
 
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] unfullscreen <index>
-window-tool [--app <bundle-id>] unfullscreen-by-title <pattern>
+window-tool [--app <name-or-id>] unfullscreen <window>
 ```
 
 ## Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<index>` | Yes (unfullscreen) | Window index (from `list`) |
-| `<pattern>` | Yes (unfullscreen-by-title) | Substring to match against window titles |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
 
 ## Details
 
@@ -24,5 +22,5 @@ Exits native macOS fullscreen mode, returning the window to its previous size an
 
 ```sh
 window-tool unfullscreen 0
-window-tool unfullscreen-by-title "Safari"
+window-tool unfullscreen title="Safari"
 ```

@@ -1,20 +1,18 @@
-# window-tool fullscreen / fullscreen-by-title
+# window-tool fullscreen
 
-Enter macOS fullscreen mode for a window by index or title.
+Enter macOS fullscreen mode for a window.
 
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] fullscreen <index>
-window-tool [--app <bundle-id>] fullscreen-by-title <pattern>
+window-tool [--app <name-or-id>] fullscreen <window>
 ```
 
 ## Arguments
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<index>` | Yes (fullscreen) | Window index (from `list`) |
-| `<pattern>` | Yes (fullscreen-by-title) | Substring to match against window titles |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
 
 ## Details
 
@@ -26,5 +24,5 @@ Use `unfullscreen` to exit fullscreen mode.
 
 ```sh
 window-tool fullscreen 0
-window-tool fullscreen-by-title "Safari"
+window-tool fullscreen title="Safari"
 ```
