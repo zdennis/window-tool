@@ -425,7 +425,7 @@ func printWindowInfo(_ w: WindowInfo, bundleId: String? = nil) {
 }
 
 /// Prints info about the frontmost application's primary window.
-func activeWindowCommand() throws {
+func activeWindowCommand(idOnly: Bool) throws {
     guard let frontApp = NSWorkspace.shared.frontmostApplication,
           let bundleId = frontApp.bundleIdentifier else {
         throw WindowToolError.appNotFound("(no frontmost application)")
@@ -438,7 +438,38 @@ func activeWindowCommand() throws {
         throw WindowToolError.windowIndexOutOfRange(index: 0, count: 0)
     }
 
-    printWindowInfo(w, bundleId: bundleId)
+    if idOnly {
+        if let wid = w.windowID { print(wid) }
+    } else {
+        printWindowInfo(w, bundleId: bundleId)
+    }
+}
+
+func shellInitCommand(shell: String) {
+    let binary = ProcessInfo.processInfo.processName
+    switch shell {
+    case "zsh":
+        print("# Add this to your ~/.zshrc or equivalent file")
+        print("# window-tool shell integration")
+        print("if [ -z \"$WINDOWID\" ]; then")
+        print("  export WINDOWID=\"$(\(binary) active-window --id 2>/dev/null)\"")
+        print("fi")
+    case "bash":
+        print("# Add this to your ~/.bashrc or equivalent file")
+        print("# window-tool shell integration")
+        print("if [ -z \"$WINDOWID\" ]; then")
+        print("  export WINDOWID=\"$(\(binary) active-window --id 2>/dev/null)\"")
+        print("fi")
+    case "fish":
+        print("# Add this to your ~/.config/fish/config.fish or equivalent file")
+        print("# window-tool shell integration")
+        print("if not set -q WINDOWID")
+        print("  set -gx WINDOWID (\(binary) active-window --id 2>/dev/null)")
+        print("end")
+    default:
+        fputs("Unsupported shell: \(shell). Supported: zsh, bash, fish\n", stderr)
+        exit(1)
+    }
 }
 
 func activeScreenCommand() {
@@ -1685,7 +1716,7 @@ func usage() {
 
     Commands:
       active-screen                            Print active screen bounds (x, y, width, height)
-      active-window                            Print info about the frontmost app's primary window
+      active-window [--id]                     Print info about the frontmost app's primary window
       columnize <w> <w> [<w>...] [--gap N]     Arrange windows side-by-side in columns
       count                                    Print number of windows
       dim <window> [--opacity 0.5] [--duration 0]  Dim everything except a window
@@ -1722,6 +1753,7 @@ func usage() {
       restore-layout <file>                    Restore window layout from a JSON file
       save-layout <file>                       Save window layout to a JSON file
       screens                                  List all displays with bounds
+      shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
       shake <window> [offset] [count] [delay]  Shake a window
       shake-by-title <pattern> [offset] [count] [delay]  Shake a window by title match
       snap <window> <position>                 Snap window to screen region
@@ -1812,7 +1844,7 @@ let accessibilityCommands: Set<String> = [
     "active-window"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["screens", "active-screen", "active-window", "list-open-windows", "undim", "unborder-all", "help", "--help", "-h"]
+let appIndependentCommands: Set<String> = ["screens", "active-screen", "active-window", "list-open-windows", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
 
 do {
     if accessibilityCommands.contains(command) {
@@ -2150,7 +2182,14 @@ do {
     case "active-screen":
         activeScreenCommand()
     case "active-window":
-        try activeWindowCommand()
+        let idOnly = args.contains("--id")
+        try activeWindowCommand(idOnly: idOnly)
+    case "shell-init":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool shell-init <zsh|bash|fish>\n", stderr)
+            exit(1)
+        }
+        shellInitCommand(shell: args[1])
     case "help", "--help", "-h":
         usage()
     default:
