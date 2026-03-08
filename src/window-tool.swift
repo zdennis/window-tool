@@ -295,7 +295,7 @@ enum WindowSelector {
 }
 
 /// Parses a window selector from a string argument.
-/// Supports `id=<windowID>` for CGWindowID or a plain integer for index.
+/// Supports `id=<windowID>` for CGWindowID, `title=<pattern>` for title match, or a plain integer for index.
 func parseWindowSelector(_ arg: String) throws -> WindowSelector {
     if arg.hasPrefix("id=") {
         let idStr = String(arg.dropFirst(3))
@@ -303,6 +303,13 @@ func parseWindowSelector(_ arg: String) throws -> WindowSelector {
             throw WindowToolError.invalidArgument(value: arg, label: "window ID")
         }
         return .byWindowID(CGWindowID(id))
+    }
+    if arg.hasPrefix("title=") {
+        let pattern = String(arg.dropFirst(6))
+        guard !pattern.isEmpty else {
+            throw WindowToolError.invalidArgument(value: arg, label: "title pattern")
+        }
+        return .byTitle(pattern)
     }
     return .byIndex(try parseInt(arg, label: "index"))
 }
@@ -1739,58 +1746,44 @@ func usage() {
     Commands:
       active-screen                            Print active screen bounds (x, y, width, height)
       active-window [--id]                     Print info about the frontmost app's primary window
+      border <window> [--color blue] [--width 3]    Add a persistent border that tracks a window
       columnize <w> <w> [<w>...] [--gap N]     Arrange windows side-by-side in columns
       count                                    Print number of windows
       dim <window> [--opacity 0.5] [--duration 0]  Dim everything except a window
-      dim-by-title <pattern> [--opacity 0.5] [--duration 0]  Dim by title match
       flash <window> [--color green] [--count 1]  Flash a colored overlay on a window
-      flash-by-title <pattern> [--color green] [--count 1]  Flash overlay by title match
       focus <window>                           Bring window to front
-      focus-by-title <pattern>                 Bring window to front by title match
       fullscreen <window>                      Enter macOS fullscreen mode
-      fullscreen-by-title <pattern>            Enter fullscreen by title match
-      border <window> [--color blue] [--width 3]    Add a persistent border that tracks a window
-      border-by-title <pattern> [--color blue] [--width 3]  Persistent border by title match
       highlight <window> [--color C] [--duration S]  Briefly highlight a window (auto-dismisses)
-      highlight-by-title <pattern> [--color C] [--duration S]  Brief highlight by title match
       info <window>                            Show detailed info for a window
       list                                     List all windows with index, window ID, position, size, and title
       list-open-windows                        List apps with open windows
       maximize <window>                        Maximize window to fill screen
-      maximize-by-title <pattern>              Maximize windows matching title
       minimize <window>                        Minimize a window
-      minimize-by-title <pattern>              Minimize a window by title match
       move <window> <x> <y> [<w> <h>]          Move/resize window
-      move-by-title <pattern> <x> <y> [<w> <h>]  Move/resize windows matching title
       move-to-screen <window> <screen>         Move window to a different display
-      move-to-screen-by-title <pattern> <screen>  Move window to display by title
       preview <window> [--output <path>]       Capture a window screenshot as PNG
-      preview-by-title <pattern> [--output <path>]  Capture window screenshot by title
       record <window> --output <path> [options]  Record video of a window
-      record-by-title <pattern> --output <path> [options]  Record video by title
         Record options: [--fps 30] [--duration <seconds>] [--no-countdown] [--no-border]
       resize <window> <width> <height>         Resize window
-      resize-by-title <pattern> <width> <height>  Resize windows matching title
       restore                                  Restore all minimized windows
       restore-layout <file>                    Restore window layout from a JSON file
       save-layout <file>                       Save window layout to a JSON file
       screens                                  List all displays with bounds
-      shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
       shake <window> [offset] [count] [delay]  Shake a window
-      shake-by-title <pattern> [offset] [count] [delay]  Shake a window by title match
+      shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
       snap <window> <position>                 Snap window to screen region
-      snap-by-title <pattern> <position>       Snap window to screen region by title
       stack [offset]                           Cascade windows with offset (default: 30)
-      unborder [<window>]                          Remove borders for target app (or one window)
-      unborder-by-title <pattern>                Remove border by title match
-      unborder-all                               Remove all active borders
+      unborder [<window>]                      Remove borders for target app (or one window)
+      unborder-all                             Remove all active borders
       undim                                    Remove active dim overlay
-      unfullscreen <window>                     Exit macOS fullscreen mode
-      unfullscreen-by-title <pattern>          Exit fullscreen by title match
+      unfullscreen <window>                    Exit macOS fullscreen mode
       watch [interval]                         Watch for window changes (default: 1.0s)
 
     Window selectors:
-      <window> can be an index (0, 1, 2...) or id=<window_id> (e.g., id=1341)
+      <window> can be:
+        0, 1, 2...          Index from 'list' output
+        id=<window_id>      CGWindowID (e.g., id=1341)
+        title=<pattern>     Substring match on window title (e.g., title="my notes")
       Use 'list' to see available indices and window IDs
 
     Snap positions:
@@ -1816,7 +1809,7 @@ func usage() {
       window-tool --app iTerm columnize 0 1 2
       window-tool move 0 100 50 1200 900
       window-tool focus id=1341
-      window-tool move-by-title "my-notes" 0 0 1400 1000
+      window-tool move title="my-notes" 0 0 1400 1000
       window-tool --app Safari focus 0 + highlight 0
     """
     print(help)
@@ -1852,24 +1845,15 @@ if args.first == "--version" || args.first == "-v" {
 
 // Commands that need Accessibility access
 let accessibilityCommands: Set<String> = [
-    "list", "info", "count", "columnize", "move", "move-by-title",
-    "resize", "resize-by-title",
-    "snap", "snap-by-title",
-    "move-to-screen", "move-to-screen-by-title",
-    "maximize", "maximize-by-title",
-    "minimize", "minimize-by-title", "restore",
+    "list", "info", "count", "columnize",
+    "move", "resize", "snap", "move-to-screen",
+    "maximize", "minimize", "restore",
     "save-layout", "restore-layout", "stack", "watch",
-    "fullscreen", "fullscreen-by-title",
-    "unfullscreen", "unfullscreen-by-title",
-    "focus", "focus-by-title", "flash", "flash-by-title",
-    "shake", "shake-by-title",
-    "highlight", "highlight-by-title",
-    "border", "border-by-title", "unborder", "unborder-by-title",
-    "dim", "dim-by-title",
-    "preview", "preview-by-title",
-    "record", "record-by-title",
-    "list-open-windows",
-    "active-window"
+    "fullscreen", "unfullscreen",
+    "focus", "flash", "shake",
+    "highlight", "border", "unborder",
+    "dim", "preview", "record",
+    "list-open-windows", "active-window"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
 let appIndependentCommands: Set<String> = ["screens", "active-screen", "active-window", "list-open-windows", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
@@ -1908,13 +1892,13 @@ func runCommand(_ args: [String]) throws {
         try listCommand(bundleId: config.bundleId)
     case "info":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool info <index|id=N>\n", stderr)
+            fputs("Usage: window-tool info <window>\n", stderr)
             exit(1)
         }
         try infoCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]))
     case "columnize":
         guard args.count >= 3 else {
-            fputs("Usage: window-tool columnize <index|id=N> <index|id=N> [...] [--gap N]\n", stderr)
+            fputs("Usage: window-tool columnize <window> <window> [...] [--gap N]\n", stderr)
             exit(1)
         }
         var columnArgs = Array(args.dropFirst())
@@ -1932,7 +1916,7 @@ func runCommand(_ args: [String]) throws {
         countCommand(bundleId: config.bundleId)
     case "move":
         guard args.count >= 4 else {
-            fputs("Usage: window-tool move <index|id=N> <x> <y> [<width> <height>]\n", stderr)
+            fputs("Usage: window-tool move <window> <x> <y> [<width> <height>]\n", stderr)
             exit(1)
         }
         let selector = try parseWindowSelector(args[1])
@@ -1945,39 +1929,18 @@ func runCommand(_ args: [String]) throws {
             height = CGFloat(try parseDouble(args[5], label: "height"))
         }
         try moveCommand(bundleId: config.bundleId, selector: selector, x: x, y: y, width: width, height: height)
-    case "move-by-title":
-        guard args.count >= 4 else {
-            fputs("Usage: window-tool move-by-title <pattern> <x> <y> [<width> <height>]\n", stderr)
-            exit(1)
-        }
-        let pattern = args[1]
-        let x = CGFloat(try parseDouble(args[2], label: "x"))
-        let y = CGFloat(try parseDouble(args[3], label: "y"))
-        var width: CGFloat? = nil
-        var height: CGFloat? = nil
-        if args.count >= 6 {
-            width = CGFloat(try parseDouble(args[4], label: "width"))
-            height = CGFloat(try parseDouble(args[5], label: "height"))
-        }
-        try moveCommand(bundleId: config.bundleId, selector: .byTitle(pattern), x: x, y: y, width: width, height: height)
     case "resize":
         guard args.count >= 4 else {
-            fputs("Usage: window-tool resize <index|id=N> <width> <height>\n", stderr)
+            fputs("Usage: window-tool resize <window> <width> <height>\n", stderr)
             exit(1)
         }
         let selector = try parseWindowSelector(args[1])
         let width = CGFloat(try parseDouble(args[2], label: "width"))
         let height = CGFloat(try parseDouble(args[3], label: "height"))
         try resizeCommand(bundleId: config.bundleId, selector: selector, width: width, height: height)
-    case "resize-by-title":
-        guard args.count >= 4 else {
-            fputs("Usage: window-tool resize-by-title <pattern> <width> <height>\n", stderr)
-            exit(1)
-        }
-        try resizeCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), width: CGFloat(try parseDouble(args[2], label: "width")), height: CGFloat(try parseDouble(args[3], label: "height")))
     case "snap":
         guard args.count >= 3 else {
-            fputs("Usage: window-tool snap <index|id=N> <position>\nPositions: \(SnapPosition.allNames)\n", stderr)
+            fputs("Usage: window-tool snap <window> <position>\nPositions: \(SnapPosition.allNames)\n", stderr)
             exit(1)
         }
         guard let position = SnapPosition(rawValue: args[2]) else {
@@ -1985,52 +1948,24 @@ func runCommand(_ args: [String]) throws {
             exit(1)
         }
         try snapCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]), position: position)
-    case "snap-by-title":
-        guard args.count >= 3 else {
-            fputs("Usage: window-tool snap-by-title <pattern> <position>\nPositions: \(SnapPosition.allNames)\n", stderr)
-            exit(1)
-        }
-        guard let position = SnapPosition(rawValue: args[2]) else {
-            fputs("Error: Unknown snap position '\(args[2])'. Valid: \(SnapPosition.allNames)\n", stderr)
-            exit(1)
-        }
-        try snapCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), position: position)
     case "move-to-screen":
         guard args.count >= 3 else {
-            fputs("Usage: window-tool move-to-screen <index|id=N> <screen>\n", stderr)
+            fputs("Usage: window-tool move-to-screen <window> <screen>\n", stderr)
             exit(1)
         }
         try moveToScreenCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]), screenIndex: try parseInt(args[2], label: "screen"))
-    case "move-to-screen-by-title":
-        guard args.count >= 3 else {
-            fputs("Usage: window-tool move-to-screen-by-title <pattern> <screen>\n", stderr)
-            exit(1)
-        }
-        try moveToScreenCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), screenIndex: try parseInt(args[2], label: "screen"))
     case "maximize":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool maximize <index|id=N>\n", stderr)
+            fputs("Usage: window-tool maximize <window>\n", stderr)
             exit(1)
         }
         try maximizeCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]))
-    case "maximize-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool maximize-by-title <pattern>\n", stderr)
-            exit(1)
-        }
-        try maximizeCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "minimize":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool minimize <index|id=N>\n", stderr)
+            fputs("Usage: window-tool minimize <window>\n", stderr)
             exit(1)
         }
         try minimizeCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]))
-    case "minimize-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool minimize-by-title <pattern>\n", stderr)
-            exit(1)
-        }
-        try minimizeCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "restore":
         try restoreCommand(bundleId: config.bundleId)
     case "save-layout":
@@ -2053,43 +1988,25 @@ func runCommand(_ args: [String]) throws {
         try watchCommand(bundleId: config.bundleId, interval: interval)
     case "focus":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool focus <index|id=N>\n", stderr)
+            fputs("Usage: window-tool focus <window>\n", stderr)
             exit(1)
         }
         try focusCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]))
-    case "focus-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool focus-by-title <pattern>\n", stderr)
-            exit(1)
-        }
-        try focusCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "fullscreen":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool fullscreen <index|id=N>\n", stderr)
+            fputs("Usage: window-tool fullscreen <window>\n", stderr)
             exit(1)
         }
         try fullscreenCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]))
-    case "fullscreen-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool fullscreen-by-title <pattern>\n", stderr)
-            exit(1)
-        }
-        try fullscreenCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "unfullscreen":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool unfullscreen <index|id=N>\n", stderr)
+            fputs("Usage: window-tool unfullscreen <window>\n", stderr)
             exit(1)
         }
         try unfullscreenCommand(bundleId: config.bundleId, selector: try parseWindowSelector(args[1]))
-    case "unfullscreen-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool unfullscreen-by-title <pattern>\n", stderr)
-            exit(1)
-        }
-        try unfullscreenCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "shake":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool shake <index|id=N> [offset] [count] [delay]\n", stderr)
+            fputs("Usage: window-tool shake <window> [offset] [count] [delay]\n", stderr)
             exit(1)
         }
         let selector = try parseWindowSelector(args[1])
@@ -2097,34 +2014,15 @@ func runCommand(_ args: [String]) throws {
         let count = args.count >= 4 ? try parseInt(args[3], label: "count") : 6
         let delay = args.count >= 5 ? try parseDouble(args[4], label: "delay") : 0.04
         try shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
-    case "shake-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool shake-by-title <pattern> [offset] [count] [delay]\n", stderr)
-            exit(1)
-        }
-        let selector = WindowSelector.byTitle(args[1])
-        let offset = args.count >= 3 ? try parseInt(args[2], label: "offset") : 12
-        let count = args.count >= 4 ? try parseInt(args[3], label: "count") : 6
-        let delay = args.count >= 5 ? try parseDouble(args[4], label: "delay") : 0.04
-        try shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
     case "flash":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool flash <index|id=N> [--color green] [--count 1]\n", stderr)
+            fputs("Usage: window-tool flash <window> [--color green] [--count 1]\n", stderr)
             exit(1)
         }
         var flashArgs = Array(args.dropFirst())
         let selector = try parseWindowSelector(flashArgs.removeFirst())
         let flags = try parseFlashFlags(&flashArgs)
         try flashCommand(bundleId: config.bundleId, selector: selector, color: flags.color, count: flags.count)
-    case "flash-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool flash-by-title <pattern> [--color green] [--count 1]\n", stderr)
-            exit(1)
-        }
-        var flashArgs = Array(args.dropFirst())
-        let pattern = flashArgs.removeFirst()
-        let flags = try parseFlashFlags(&flashArgs)
-        try flashCommand(bundleId: config.bundleId, selector: .byTitle(pattern), color: flags.color, count: flags.count)
     case "highlight":
         guard args.count >= 2 else {
             fputs("Usage: window-tool highlight <window> [--color <color>] [--duration <seconds>]\n", stderr)
@@ -2133,13 +2031,6 @@ func runCommand(_ args: [String]) throws {
         let selector = try parseWindowSelector(args[1])
         let hlFlags = try parseHighlightFlags(Array(args.dropFirst()))
         try highlightCommand(bundleId: config.bundleId, selector: selector, color: hlFlags.color, duration: hlFlags.duration)
-    case "highlight-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool highlight-by-title <pattern> [--color <color>] [--duration <seconds>]\n", stderr)
-            exit(1)
-        }
-        let hlFlags = try parseHighlightFlags(Array(args.dropFirst()))
-        try highlightCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), color: hlFlags.color, duration: hlFlags.duration)
     case "border":
         guard args.count >= 2 else {
             fputs("Usage: window-tool border <window> [--color <color>] [--width <pixels>]\n", stderr)
@@ -2148,13 +2039,6 @@ func runCommand(_ args: [String]) throws {
         let selector = try parseWindowSelector(args[1])
         let borderFlags = try parseBorderFlags(Array(args.dropFirst()))
         try borderCommand(bundleId: config.bundleId, selector: selector, color: borderFlags.color, width: borderFlags.width)
-    case "border-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool border-by-title <pattern> [--color <color>] [--width <pixels>]\n", stderr)
-            exit(1)
-        }
-        let borderFlags = try parseBorderFlags(Array(args.dropFirst()))
-        try borderCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), color: borderFlags.color, width: borderFlags.width)
     case "unborder":
         if args.count >= 2 {
             let selector = try parseWindowSelector(args[1])
@@ -2162,12 +2046,6 @@ func runCommand(_ args: [String]) throws {
         } else {
             unborderCommand(bundleId: config.bundleId)
         }
-    case "unborder-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool unborder-by-title <pattern>\n", stderr)
-            exit(1)
-        }
-        unborderCommand(bundleId: config.bundleId, selector: .byTitle(args[1]))
     case "unborder-all":
         unborderAllCommand()
     case "dim":
@@ -2178,51 +2056,26 @@ func runCommand(_ args: [String]) throws {
         let selector = try parseWindowSelector(args[1])
         let dimFlags = try parseDimFlags(Array(args.dropFirst()))
         try dimCommand(bundleId: config.bundleId, selector: selector, opacity: dimFlags.opacity, duration: dimFlags.duration)
-    case "dim-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool dim-by-title <pattern> [--opacity 0.5] [--duration 0]\n", stderr)
-            exit(1)
-        }
-        let dimFlags = try parseDimFlags(Array(args.dropFirst()))
-        try dimCommand(bundleId: config.bundleId, selector: .byTitle(args[1]), opacity: dimFlags.opacity, duration: dimFlags.duration)
     case "undim":
         try undimCommand()
     case "preview":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool preview <index|id=N> [--output <path>]\n", stderr)
+            fputs("Usage: window-tool preview <window> [--output <path>]\n", stderr)
             exit(1)
         }
         var previewArgs = Array(args.dropFirst())
         let previewSelector = try parseWindowSelector(previewArgs.removeFirst())
         let outputPath = try parsePreviewFlags(previewArgs)
         try previewCommand(bundleId: config.bundleId, selector: previewSelector, outputPath: outputPath)
-    case "preview-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool preview-by-title <pattern> [--output <path>]\n", stderr)
-            exit(1)
-        }
-        var previewArgs = Array(args.dropFirst())
-        let pattern = previewArgs.removeFirst()
-        let outputPath = try parsePreviewFlags(previewArgs)
-        try previewCommand(bundleId: config.bundleId, selector: .byTitle(pattern), outputPath: outputPath)
     case "record":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool record <index|id=N> --output <path> [--fps 30] [--duration N]\n", stderr)
+            fputs("Usage: window-tool record <window> --output <path> [--fps 30] [--duration N]\n", stderr)
             exit(1)
         }
         var recordArgs = Array(args.dropFirst())
         let recordSelector = try parseWindowSelector(recordArgs.removeFirst())
         let recordFlags = try parseRecordFlags(recordArgs)
         try recordCommand(bundleId: config.bundleId, selector: recordSelector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
-    case "record-by-title":
-        guard args.count >= 2 else {
-            fputs("Usage: window-tool record-by-title <pattern> --output <path> [--fps 30] [--duration N]\n", stderr)
-            exit(1)
-        }
-        var recordArgs = Array(args.dropFirst())
-        let pattern = recordArgs.removeFirst()
-        let recordFlags = try parseRecordFlags(recordArgs)
-        try recordCommand(bundleId: config.bundleId, selector: .byTitle(pattern), output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
     case "list-open-windows":
         listOpenWindowsCommand()
     case "screens":
