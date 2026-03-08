@@ -1,3 +1,4 @@
+import AVFoundation
 import Cocoa
 import Foundation
 import ScreenCaptureKit
@@ -1216,6 +1217,308 @@ func previewCommand(bundleId: String, selector: WindowSelector, outputPath: Stri
     }
 }
 
+// MARK: - Record Command
+
+func parseRecordFlags(_ args: [String]) throws -> (output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) {
+    guard let outIdx = args.firstIndex(of: "--output") else {
+        throw WindowToolError.invalidArgument(value: "--output", label: "flag (required, specify an output file path)")
+    }
+    guard outIdx + 1 < args.count else {
+        throw WindowToolError.invalidArgument(value: "--output", label: "flag (requires a file path)")
+    }
+    let output = args[outIdx + 1]
+
+    var fps = 30
+    if let fpsIdx = args.firstIndex(of: "--fps") {
+        guard fpsIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--fps", label: "flag (requires a value)")
+        }
+        fps = try parseInt(args[fpsIdx + 1], label: "fps")
+    }
+
+    var duration: Double? = nil
+    if let durIdx = args.firstIndex(of: "--duration") {
+        guard durIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
+        }
+        duration = try parseDouble(args[durIdx + 1], label: "duration")
+    }
+
+    let countdown = !args.contains("--no-countdown")
+    let border = !args.contains("--no-border")
+
+    return (output, fps, duration, countdown, border)
+}
+
+class RecordingDelegate: NSObject, SCStreamOutput {
+    let assetWriter: AVAssetWriter
+    let videoInput: AVAssetWriterInput
+    let adaptor: AVAssetWriterInputPixelBufferAdaptor
+    let fps: Int
+    var startTime: CFAbsoluteTime?
+    var lastPixelBuffer: CVPixelBuffer?
+    var frameTimer: DispatchSourceTimer?
+    private let lock = NSLock()
+
+    init(assetWriter: AVAssetWriter, videoInput: AVAssetWriterInput, adaptor: AVAssetWriterInputPixelBufferAdaptor, fps: Int) {
+        self.assetWriter = assetWriter
+        self.videoInput = videoInput
+        self.adaptor = adaptor
+        self.fps = fps
+    }
+
+    func startFrameTimer() {
+        startTime = CFAbsoluteTimeGetCurrent()
+        assetWriter.startSession(atSourceTime: .zero)
+
+        let interval = 1.0 / Double(fps)
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.window-tool.frame-timer"))
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in
+            self?.writeFrame()
+        }
+        timer.resume()
+        frameTimer = timer
+    }
+
+    func stopFrameTimer() {
+        frameTimer?.cancel()
+        frameTimer = nil
+    }
+
+    private func writeFrame() {
+        lock.lock()
+        let pb = lastPixelBuffer
+        lock.unlock()
+
+        guard let pixelBuffer = pb, let start = startTime else { return }
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        let time = CMTime(seconds: elapsed, preferredTimescale: CMTimeScale(fps * 100))
+        if videoInput.isReadyForMoreMediaData {
+            adaptor.append(pixelBuffer, withPresentationTime: time)
+        }
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen else { return }
+        guard sampleBuffer.isValid else { return }
+
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              let statusValue = attachments.first?[.status] as? Int,
+              let status = SCFrameStatus(rawValue: statusValue),
+              status == .complete else {
+            return
+        }
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        lock.lock()
+        lastPixelBuffer = pixelBuffer
+        lock.unlock()
+    }
+}
+
+func makeRecordingBorderOverlay(frame: NSRect, color: NSColor, width: CGFloat) -> NSWindow {
+    let overlay = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+    overlay.isOpaque = false
+    overlay.backgroundColor = .clear
+    overlay.level = .floating
+    overlay.ignoresMouseEvents = true
+    overlay.hasShadow = false
+    let view = BorderView(frame: NSRect(origin: .zero, size: frame.size))
+    view.borderColor = color
+    view.borderWidth = width
+    overlay.contentView = view
+    overlay.orderFrontRegardless()
+    return overlay
+}
+
+func makeCountdownOverlay(frame: NSRect) -> NSWindow {
+    let overlaySize = NSSize(width: 120, height: 120)
+    let overlayX = frame.origin.x + (frame.width - overlaySize.width) / 2
+    let overlayY = frame.origin.y + (frame.height - overlaySize.height) / 2
+    let overlay = NSWindow(
+        contentRect: NSRect(origin: NSPoint(x: overlayX, y: overlayY), size: overlaySize),
+        styleMask: .borderless, backing: .buffered, defer: false
+    )
+    overlay.isOpaque = false
+    overlay.backgroundColor = NSColor.black.withAlphaComponent(0.7)
+    overlay.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+    overlay.ignoresMouseEvents = true
+    overlay.hasShadow = false
+
+    let label = NSTextField(labelWithString: "3")
+    label.font = NSFont.systemFont(ofSize: 64, weight: .bold)
+    label.textColor = .white
+    label.alignment = .center
+    label.frame = NSRect(origin: .zero, size: overlaySize)
+    overlay.contentView = label
+    overlay.orderFrontRegardless()
+    return overlay
+}
+
+func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Double?, borderOverlay: NSWindow?) {
+    let semaphore = DispatchSemaphore(value: 0)
+    var setupError: (any Error)?
+
+    Task {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            guard let scWindow = content.windows.first(where: { $0.windowID == windowID }) else {
+                setupError = WindowToolError.noWindowMatchingID(windowID)
+                semaphore.signal()
+                return
+            }
+
+            let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+            let streamConfig = SCStreamConfiguration()
+            streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+            streamConfig.pixelFormat = kCVPixelFormatType_32BGRA
+            streamConfig.showsCursor = true
+            streamConfig.captureResolution = .best
+            streamConfig.queueDepth = 3
+
+            let contentRect = filter.contentRect
+            let pointPixelScale = filter.pointPixelScale
+            let width = Int(contentRect.width * CGFloat(pointPixelScale))
+            let height = Int(contentRect.height * CGFloat(pointPixelScale))
+            streamConfig.width = width
+            streamConfig.height = height
+
+            let outputURL = URL(fileURLWithPath: (output as NSString).expandingTildeInPath)
+            try? FileManager.default.removeItem(at: outputURL)
+            let fileType: AVFileType = outputURL.pathExtension.lowercased() == "mp4" ? .mp4 : .mov
+            let assetWriter = try AVAssetWriter(outputURL: outputURL, fileType: fileType)
+
+            let videoSettings: [String: Any] = [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: width,
+                AVVideoHeightKey: height
+            ]
+            let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+            videoInput.expectsMediaDataInRealTime = true
+            assetWriter.add(videoInput)
+
+            let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: nil)
+
+            guard assetWriter.startWriting() else {
+                fputs("Error: Failed to start writing: \(assetWriter.error?.localizedDescription ?? "unknown")\n", stderr)
+                exit(1)
+            }
+
+            let delegate = RecordingDelegate(assetWriter: assetWriter, videoInput: videoInput, adaptor: adaptor, fps: fps)
+            let stream = SCStream(filter: filter, configuration: streamConfig, delegate: nil)
+            try stream.addStreamOutput(delegate, type: .screen, sampleHandlerQueue: DispatchQueue(label: "com.window-tool.record"))
+
+            try await stream.startCapture()
+            delegate.startFrameTimer()
+
+            fputs("Recording window \(windowID) to \(outputURL.path) (\(width)x\(height) @ \(fps)fps)\n", stderr)
+            fputs("Press Ctrl-C to stop recording\n", stderr)
+
+            var stopping = false
+            func stopRecording() {
+                guard !stopping else { return }
+                stopping = true
+                delegate.stopFrameTimer()
+                if let overlay = borderOverlay {
+                    DispatchQueue.main.async { overlay.orderOut(nil) }
+                }
+                Task {
+                    try? await stream.stopCapture()
+                    videoInput.markAsFinished()
+                    await assetWriter.finishWriting()
+                    fputs("Recording saved to \(outputURL.path)\n", stderr)
+                    if config.jsonOutput {
+                        printJSON(["path": outputURL.path, "window_id": Int(windowID), "width": width, "height": height])
+                    } else {
+                        print(outputURL.path)
+                    }
+                    exit(0)
+                }
+            }
+
+            signal(SIGINT, SIG_IGN)
+            let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+            intSource.setEventHandler { stopRecording() }
+            intSource.resume()
+
+            signal(SIGTERM, SIG_IGN)
+            let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+            termSource.setEventHandler { stopRecording() }
+            termSource.resume()
+
+            if let duration = duration {
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+                    stopRecording()
+                }
+            }
+
+        } catch let error as NSError where error.domain == "com.apple.ScreenCaptureKit.ErrorDomain" {
+            fputs("Error: Screen Recording permission is not granted.\nGrant access in System Settings > Privacy & Security > Screen Recording.\n", stderr)
+            exit(1)
+        } catch {
+            setupError = error
+            semaphore.signal()
+        }
+    }
+
+    DispatchQueue.global().async {
+        semaphore.wait()
+        if let error = setupError {
+            fputs("Error: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
+    }
+}
+
+func recordCommand(bundleId: String, selector: WindowSelector, output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    guard let windowID = window.windowID else {
+        fputs("Error: Cannot record window — no window ID available\n", stderr)
+        exit(1)
+    }
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    let cocoaY = mainScreenHeight - window.position.y - window.size.height
+    let windowFrame = NSRect(x: window.position.x, y: cocoaY,
+                             width: window.size.width, height: window.size.height)
+
+    var borderOverlay: NSWindow? = nil
+
+    if countdown {
+        borderOverlay = border ? makeRecordingBorderOverlay(frame: windowFrame, color: .red, width: 4) : nil
+        let countdownOverlay = makeCountdownOverlay(frame: windowFrame)
+
+        var remaining = 3
+        fputs("Recording starts in 3...\n", stderr)
+
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+            remaining -= 1
+            if remaining > 0 {
+                fputs("\(remaining)...\n", stderr)
+                (countdownOverlay.contentView as? NSTextField)?.stringValue = "\(remaining)"
+            } else {
+                timer.invalidate()
+                countdownOverlay.orderOut(nil)
+                if let view = borderOverlay?.contentView as? BorderView {
+                    view.borderColor = .green
+                    view.needsDisplay = true
+                }
+                startRecording(windowID: windowID, output: output, fps: fps, duration: duration, borderOverlay: borderOverlay)
+            }
+        }
+    } else {
+        borderOverlay = border ? makeRecordingBorderOverlay(frame: windowFrame, color: .green, width: 4) : nil
+        startRecording(windowID: windowID, output: output, fps: fps, duration: duration, borderOverlay: borderOverlay)
+    }
+
+    app.run()
+}
+
 // MARK: - Layout Types
 
 struct WindowSnapshot: Codable {
@@ -1410,6 +1713,9 @@ func usage() {
       move-to-screen-by-title <pattern> <screen>  Move window to display by title
       preview <window> [--output <path>]       Capture a window screenshot as PNG
       preview-by-title <pattern> [--output <path>]  Capture window screenshot by title
+      record <window> --output <path> [options]  Record video of a window
+      record-by-title <pattern> --output <path> [options]  Record video by title
+        Record options: [--fps 30] [--duration <seconds>] [--no-countdown] [--no-border]
       resize <window> <width> <height>         Resize window
       resize-by-title <pattern> <width> <height>  Resize windows matching title
       restore                                  Restore all minimized windows
@@ -1501,6 +1807,7 @@ let accessibilityCommands: Set<String> = [
     "border", "border-by-title", "unborder", "unborder-by-title",
     "dim", "dim-by-title",
     "preview", "preview-by-title",
+    "record", "record-by-title",
     "list-open-windows",
     "active-window"
 ]
@@ -1818,6 +2125,24 @@ do {
         let pattern = previewArgs.removeFirst()
         let outputPath = try parsePreviewFlags(previewArgs)
         try previewCommand(bundleId: config.bundleId, selector: .byTitle(pattern), outputPath: outputPath)
+    case "record":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool record <index|id=N> --output <path> [--fps 30] [--duration N]\n", stderr)
+            exit(1)
+        }
+        var recordArgs = Array(args.dropFirst())
+        let recordSelector = try parseWindowSelector(recordArgs.removeFirst())
+        let recordFlags = try parseRecordFlags(recordArgs)
+        try recordCommand(bundleId: config.bundleId, selector: recordSelector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
+    case "record-by-title":
+        guard args.count >= 2 else {
+            fputs("Usage: window-tool record-by-title <pattern> --output <path> [--fps 30] [--duration N]\n", stderr)
+            exit(1)
+        }
+        var recordArgs = Array(args.dropFirst())
+        let pattern = recordArgs.removeFirst()
+        let recordFlags = try parseRecordFlags(recordArgs)
+        try recordCommand(bundleId: config.bundleId, selector: .byTitle(pattern), output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
     case "list-open-windows":
         listOpenWindowsCommand()
     case "screens":
