@@ -9,6 +9,7 @@ let VERSION = "0.7.0"
 
 struct Config {
     var bundleId: String = "com.googlecode.iterm2"
+    var appExplicit: Bool = false
     var jsonOutput: Bool = false
     var jsonBuffer: [Any] = []
     var chaining: Bool = false
@@ -525,24 +526,76 @@ func checkAccessibility() throws {
 
 // MARK: - Commands
 
-/// Lists all windows for the given application.
-/// Output columns (tab-separated): index, window_id, position (x,y), size (WxH), title.
-func listCommand(bundleId: String) throws {
-    let app = try requireApp(bundleId)
-    let windows = getWindows(appElement: app)
+/// Lists windows. When bundleId is provided, lists windows for that app only.
+/// When nil, lists all windows across all running apps, sorted by app name.
+func listCommand(bundleId: String?) throws {
+    struct WindowEntry {
+        let app: String
+        let bundleId: String
+        let index: Int
+        let windowID: CGWindowID?
+        let x: Int
+        let y: Int
+        let width: Int
+        let height: Int
+        let title: String
+    }
+
+    var entries: [WindowEntry] = []
+
+    if let bundleId = bundleId {
+        let appElement = try requireApp(bundleId)
+        let appName = NSWorkspace.shared.runningApplications
+            .first { $0.bundleIdentifier == bundleId }?.localizedName ?? bundleId
+        let windows = getWindows(appElement: appElement)
+        for w in windows {
+            entries.append(WindowEntry(app: appName, bundleId: bundleId, index: w.id,
+                                       windowID: w.windowID,
+                                       x: Int(w.position.x), y: Int(w.position.y),
+                                       width: Int(w.size.width), height: Int(w.size.height),
+                                       title: w.title))
+        }
+    } else {
+        let apps = NSWorkspace.shared.runningApplications
+        var seen = Set<String>()
+        for app in apps {
+            guard let bid = app.bundleIdentifier, !seen.contains(bid),
+                  app.activationPolicy == .regular else { continue }
+            let appElement = AXUIElementCreateApplication(app.processIdentifier)
+            let windows = getWindows(appElement: appElement)
+            if !windows.isEmpty {
+                seen.insert(bid)
+                let appName = app.localizedName ?? "Unknown"
+                for w in windows {
+                    entries.append(WindowEntry(app: appName, bundleId: bid, index: w.id,
+                                               windowID: w.windowID,
+                                               x: Int(w.position.x), y: Int(w.position.y),
+                                               width: Int(w.size.width), height: Int(w.size.height),
+                                               title: w.title))
+                }
+            }
+        }
+        entries.sort(by: { $0.app.lowercased() < $1.app.lowercased() })
+    }
+
     if config.jsonOutput {
-        let items = windows.map { w in
-            var dict: [String: Any] = ["index": w.id, "x": Int(w.position.x), "y": Int(w.position.y),
-             "width": Int(w.size.width), "height": Int(w.size.height), "title": w.title]
-            if let wid = w.windowID { dict["window_id"] = Int(wid) }
+        let items = entries.map { e in
+            var dict: [String: Any] = [
+                "app": e.app, "bundle_id": e.bundleId,
+                "index": e.index,
+                "x": e.x, "y": e.y,
+                "width": e.width, "height": e.height,
+                "title": e.title
+            ]
+            if let wid = e.windowID { dict["window_id"] = Int(wid) }
             return dict
         }
         printJSON(items)
     } else {
-        print("INDEX\tWID\tPOSITION\tSIZE\tTITLE")
-        for w in windows {
-            let wid = w.windowID.map { String($0) } ?? "?"
-            print("\(w.id)\t\(wid)\t\(Int(w.position.x)),\(Int(w.position.y))\t\(Int(w.size.width))x\(Int(w.size.height))\t\(w.title)")
+        print("APP\tBUNDLE ID\tINDEX\tWID\tPOSITION\tSIZE\tTITLE")
+        for e in entries {
+            let wid = e.windowID.map { String($0) } ?? "?"
+            print("\(e.app)\t\(e.bundleId)\t\(e.index)\t\(wid)\t\(e.x),\(e.y)\t\(e.width)x\(e.height)\t\(e.title)")
         }
     }
 }
@@ -558,46 +611,6 @@ func moveCommand(bundleId: String, selector: WindowSelector, x: CGFloat, y: CGFl
     }
     if case .byTitle(let pattern) = selector {
         print("Moved \(windows.count) window(s) matching '\(pattern)'")
-    }
-}
-
-/// Lists all running applications that have at least one open window.
-/// Output: one line per window, with application name, bundle identifier, and window title.
-/// Sorted alphabetically by application name.
-func listOpenWindowsCommand() {
-    let apps = NSWorkspace.shared.runningApplications
-    var entries: [(bundleId: String, name: String, title: String)] = []
-    var seen = Set<String>()
-    for app in apps {
-        guard let bundleId = app.bundleIdentifier, !seen.contains(bundleId),
-              app.activationPolicy == .regular else { continue }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        let windows = getWindows(appElement: appElement)
-        if !windows.isEmpty {
-            seen.insert(bundleId)
-            let appName = app.localizedName ?? "Unknown"
-            for w in windows {
-                entries.append((bundleId: bundleId, name: appName, title: w.title))
-            }
-        }
-    }
-    entries.sort(by: { $0.name.lowercased() < $1.name.lowercased() })
-    if config.jsonOutput {
-        let items = entries.map { e in
-            ["app": e.name, "bundle_id": e.bundleId, "title": e.title]
-        }
-        printJSON(items)
-    } else {
-        let maxName = max(entries.map { $0.name.count }.max() ?? 0, 4)
-        let maxBundleId = max(entries.map { $0.bundleId.count }.max() ?? 0, 9)
-        let headerName = "APP".padding(toLength: maxName, withPad: " ", startingAt: 0)
-        let headerBundleId = "BUNDLE ID".padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
-        print("\(headerName)  \(headerBundleId)  WINDOW TITLE")
-        for entry in entries {
-            let paddedName = entry.name.padding(toLength: maxName, withPad: " ", startingAt: 0)
-            let paddedBundleId = entry.bundleId.padding(toLength: maxBundleId, withPad: " ", startingAt: 0)
-            print("\(paddedName)  \(paddedBundleId)  \(entry.title)")
-        }
     }
 }
 
@@ -1755,8 +1768,7 @@ func usage() {
       fullscreen <window>                      Enter macOS fullscreen mode
       highlight <window> [--color C] [--duration S]  Briefly highlight a window (auto-dismisses)
       info <window>                            Show detailed info for a window
-      list                                     List all windows with index, window ID, position, size, and title
-      list-open-windows                        List apps with open windows
+      list                                     List windows (all apps, or one app with --app)
       maximize <window>                        Maximize window to fill screen
       minimize <window>                        Minimize a window
       move <window> <x> <y> [<w> <h>]          Move/resize window
@@ -1830,6 +1842,7 @@ if let appIdx = args.firstIndex(of: "--app") {
         exit(1)
     }
     config.bundleId = args[appIdx + 1]
+    config.appExplicit = true
     args.removeSubrange(appIdx...appIdx+1)
 }
 
@@ -1853,10 +1866,10 @@ let accessibilityCommands: Set<String> = [
     "focus", "flash", "shake",
     "highlight", "border", "unborder",
     "dim", "preview", "record",
-    "list-open-windows", "active-window"
+    "active-window"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["screens", "active-screen", "active-window", "list-open-windows", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
+let appIndependentCommands: Set<String> = ["list", "screens", "active-screen", "active-window", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
 
 // Split args on "+" to support chaining multiple commands
 func splitCommands(_ args: [String]) -> [[String]] {
@@ -1889,7 +1902,8 @@ func runCommand(_ args: [String]) throws {
 
     switch command {
     case "list":
-        try listCommand(bundleId: config.bundleId)
+        let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
+        try listCommand(bundleId: resolvedBundleId)
     case "info":
         guard args.count >= 2 else {
             fputs("Usage: window-tool info <window>\n", stderr)
@@ -2076,8 +2090,6 @@ func runCommand(_ args: [String]) throws {
         let recordSelector = try parseWindowSelector(recordArgs.removeFirst())
         let recordFlags = try parseRecordFlags(recordArgs)
         try recordCommand(bundleId: config.bundleId, selector: recordSelector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
-    case "list-open-windows":
-        listOpenWindowsCommand()
     case "screens":
         screensCommand()
     case "active-screen":
