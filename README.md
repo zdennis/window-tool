@@ -47,6 +47,7 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 | `focus` | [README](docs/README.focus.md) | Bring a window to front |
 | `fullscreen` | [README](docs/README.fullscreen.md) | Enter macOS fullscreen mode |
 | `highlight` | [README](docs/README.highlight.md) | Briefly highlight a window with a border |
+| `identify` | [README](docs/README.identify.md) | Show window IDs on all windows |
 | `info` | [README](docs/README.info.md) | Show detailed info for a window |
 | `list` | [README](docs/README.list.md) | List windows (all apps, or one app with --app) |
 | `maximize` | [README](docs/README.maximize.md) | Maximize a window to fill screen |
