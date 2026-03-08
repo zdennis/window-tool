@@ -1275,6 +1275,10 @@ func captureWindowImage(windowID: CGWindowID) throws -> CGImage {
             let config = SCStreamConfiguration()
             config.captureResolution = .best
             config.showsCursor = false
+            let contentRect = filter.contentRect
+            let scale = filter.pointPixelScale
+            config.width = Int(contentRect.width * CGFloat(scale))
+            config.height = Int(contentRect.height * CGFloat(scale))
             capturedImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         } catch {
             captureError = error
