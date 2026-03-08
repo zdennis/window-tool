@@ -1,2 +1,4 @@
 bin/window-tool
 .claude/settings.local.json
+.worktrees
+.workspace-project
