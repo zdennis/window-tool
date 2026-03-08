@@ -1642,6 +1642,103 @@ func recordCommand(bundleId: String, selector: WindowSelector, output: String, f
     app.run()
 }
 
+// MARK: - Identify Command
+
+func identifyCommand(bundleId: String?, duration: Double, color: NSColor) throws {
+    struct IdentifyWindow {
+        let windowID: CGWindowID
+        let position: CGPoint
+        let size: CGSize
+    }
+
+    var windows: [IdentifyWindow] = []
+
+    if let bundleId = bundleId {
+        let appElement = try requireApp(bundleId)
+        for w in getWindows(appElement: appElement) {
+            guard let wid = w.windowID else { continue }
+            windows.append(IdentifyWindow(windowID: wid, position: w.position, size: w.size))
+        }
+    } else {
+        let apps = NSWorkspace.shared.runningApplications
+        var seen = Set<String>()
+        for app in apps {
+            guard let bid = app.bundleIdentifier, !seen.contains(bid),
+                  app.activationPolicy == .regular else { continue }
+            let appElement = AXUIElementCreateApplication(app.processIdentifier)
+            let appWindows = getWindows(appElement: appElement)
+            if !appWindows.isEmpty {
+                seen.insert(bid)
+                for w in appWindows {
+                    guard let wid = w.windowID else { continue }
+                    windows.append(IdentifyWindow(windowID: wid, position: w.position, size: w.size))
+                }
+            }
+        }
+    }
+
+    guard !windows.isEmpty else {
+        fputs("No windows found\n", stderr)
+        return
+    }
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    var overlays: [NSWindow] = []
+
+    for w in windows {
+        let labelText = "id=\(w.windowID)"
+
+        let label = NSTextField(labelWithString: labelText)
+        label.font = NSFont.monospacedSystemFont(ofSize: 24, weight: .bold)
+        label.textColor = .white
+        label.alignment = .center
+        label.sizeToFit()
+
+        let padding: CGFloat = 24
+        let boxWidth = label.frame.width + padding * 2
+        let boxHeight = label.frame.height + padding * 2
+
+        let cocoaY = mainScreenHeight - w.position.y - w.size.height
+        let boxX = w.position.x + (w.size.width - boxWidth) / 2
+        let boxY = cocoaY + (w.size.height - boxHeight) / 2
+
+        let overlay = NSWindow(
+            contentRect: NSRect(x: boxX, y: boxY, width: boxWidth, height: boxHeight),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        overlay.isOpaque = false
+        overlay.backgroundColor = color.withAlphaComponent(0.85)
+        overlay.level = .normal
+        overlay.ignoresMouseEvents = true
+        overlay.hasShadow = true
+
+        label.frame = NSRect(x: padding, y: padding, width: label.frame.width, height: label.frame.height)
+        let container = NSView(frame: NSRect(origin: .zero, size: NSSize(width: boxWidth, height: boxHeight)))
+        container.addSubview(label)
+        overlay.contentView = container
+
+        overlay.order(.above, relativeTo: Int(w.windowID))
+        overlays.append(overlay)
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+        for overlay in overlays { overlay.close() }
+        app.stop(nil)
+        let dummyEvent = NSEvent.otherEvent(with: .applicationDefined,
+                                            location: .zero, modifierFlags: [],
+                                            timestamp: 0, windowNumber: 0,
+                                            context: nil, subtype: 0,
+                                            data1: 0, data2: 0)!
+        app.postEvent(dummyEvent, atStart: true)
+    }
+    app.run()
+}
+
 // MARK: - Layout Types
 
 struct WindowSnapshot: Codable {
@@ -1817,6 +1914,7 @@ func usage() {
       focus <window>                           Bring window to front
       fullscreen <window>                      Enter macOS fullscreen mode
       highlight <window> [--color C] [--duration S]  Briefly highlight a window (auto-dismisses)
+      identify [--color C] [--duration S]       Show window IDs on all windows (default: 3s)
       info <window>                            Show detailed info for a window
       list                                     List windows (all apps, or one app with --app)
       maximize <window>                        Maximize window to fill screen
@@ -1916,12 +2014,12 @@ let accessibilityCommands: Set<String> = [
     "save-layout", "restore-layout", "stack", "watch",
     "fullscreen", "unfullscreen",
     "focus", "flash", "shake",
-    "highlight", "border", "unborder",
+    "highlight", "identify", "border", "unborder",
     "dim", "preview", "record",
     "active-window"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["list", "screens", "active-screen", "active-window", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
+let appIndependentCommands: Set<String> = ["list", "identify", "screens", "active-screen", "active-window", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
 
 // Split args on "+" to support chaining multiple commands
 func splitCommands(_ args: [String]) -> [[String]] {
@@ -2058,6 +2156,24 @@ func runCommand(_ args: [String]) throws {
         let (selector, rest) = try resolveSelectorWithFlags(args)
         let hlFlags = try parseHighlightFlags(rest)
         try highlightCommand(bundleId: config.bundleId, selector: selector, color: hlFlags.color, duration: hlFlags.duration)
+    case "identify":
+        var identifyDuration = 3.0
+        var identifyColor: NSColor = .magenta
+        let identifyArgs = Array(args.dropFirst())
+        if let durIdx = identifyArgs.firstIndex(of: "--duration") {
+            guard durIdx + 1 < identifyArgs.count else {
+                throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
+            }
+            identifyDuration = try parseDouble(identifyArgs[durIdx + 1], label: "duration")
+        }
+        if let colorIdx = identifyArgs.firstIndex(of: "--color") {
+            guard colorIdx + 1 < identifyArgs.count else {
+                throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
+            }
+            identifyColor = try parseColor(identifyArgs[colorIdx + 1])
+        }
+        let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
+        try identifyCommand(bundleId: resolvedBundleId, duration: identifyDuration, color: identifyColor)
     case "border":
         let (selector, rest) = try resolveSelectorWithFlags(args)
         let borderFlags = try parseBorderFlags(rest)
