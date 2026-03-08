@@ -381,6 +381,65 @@ func screensCommand() {
 
 /// Prints the visible bounds of the screen containing the mouse cursor.
 /// Output: tab-separated x, y (top-left origin), width, height of the usable area.
+func printWindowInfo(_ w: WindowInfo, bundleId: String? = nil) {
+    let minimized = axBool(w.element, kAXMinimizedAttribute as String)
+    let fullscreen = axBool(w.element, "AXFullScreen")
+    let focused = axBool(w.element, kAXFocusedAttribute as String)
+    let main = axBool(w.element, kAXMainAttribute as String)
+    let modal = axBool(w.element, "AXModal")
+    let role = axString(w.element, kAXRoleAttribute as String)
+    let subrole = axString(w.element, kAXSubroleAttribute as String)
+    let document = axString(w.element, kAXDocumentAttribute as String)
+
+    if config.jsonOutput {
+        var dict: [String: Any] = [
+            "index": w.id, "title": w.title,
+            "x": Int(w.position.x), "y": Int(w.position.y),
+            "width": Int(w.size.width), "height": Int(w.size.height),
+            "minimized": minimized, "fullscreen": fullscreen,
+            "focused": focused, "main": main, "modal": modal
+        ]
+        if let bundleId = bundleId { dict["bundle_id"] = bundleId }
+        if let wid = w.windowID { dict["window_id"] = Int(wid) }
+        if let role = role { dict["role"] = role }
+        if let subrole = subrole { dict["subrole"] = subrole }
+        if let document = document { dict["document"] = document }
+        printJSON(dict)
+    } else {
+        if let bundleId = bundleId { print("bundle_id:\t\(bundleId)") }
+        print("index:\t\(w.id)")
+        if let wid = w.windowID { print("window_id:\t\(wid)") }
+        print("title:\t\(w.title)")
+        print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")
+        print("size:\t\(Int(w.size.width))x\(Int(w.size.height))")
+        if let role = role { print("role:\t\(role)") }
+        if let subrole = subrole { print("subrole:\t\(subrole)") }
+        print("focused:\t\(focused)")
+        print("main:\t\(main)")
+        print("minimized:\t\(minimized)")
+        print("fullscreen:\t\(fullscreen)")
+        print("modal:\t\(modal)")
+        if let document = document { print("document:\t\(document)") }
+    }
+}
+
+/// Prints info about the frontmost application's primary window.
+func activeWindowCommand() throws {
+    guard let frontApp = NSWorkspace.shared.frontmostApplication,
+          let bundleId = frontApp.bundleIdentifier else {
+        throw WindowToolError.appNotFound("(no frontmost application)")
+    }
+    let appElement = AXUIElementCreateApplication(frontApp.processIdentifier)
+    let windows = getWindows(appElement: appElement)
+
+    guard let w = windows.first(where: { axBool($0.element, kAXMainAttribute as String) })
+            ?? windows.first else {
+        throw WindowToolError.windowIndexOutOfRange(index: 0, count: 0)
+    }
+
+    printWindowInfo(w, bundleId: bundleId)
+}
+
 func activeScreenCommand() {
     // Return the screen containing the mouse cursor (the "active" screen)
     let mouseLocation = NSEvent.mouseLocation
@@ -1073,44 +1132,7 @@ func axString(_ element: AXUIElement, _ attribute: String) -> String? {
 /// Prints detailed info for a single window.
 func infoCommand(bundleId: String, selector: WindowSelector) throws {
     let w = try resolveWindow(bundleId: bundleId, selector: selector)
-
-    let minimized = axBool(w.element, kAXMinimizedAttribute as String)
-    let fullscreen = axBool(w.element, "AXFullScreen")
-    let focused = axBool(w.element, kAXFocusedAttribute as String)
-    let main = axBool(w.element, kAXMainAttribute as String)
-    let modal = axBool(w.element, "AXModal")
-    let role = axString(w.element, kAXRoleAttribute as String)
-    let subrole = axString(w.element, kAXSubroleAttribute as String)
-    let document = axString(w.element, kAXDocumentAttribute as String)
-
-    if config.jsonOutput {
-        var dict: [String: Any] = [
-            "index": w.id, "title": w.title,
-            "x": Int(w.position.x), "y": Int(w.position.y),
-            "width": Int(w.size.width), "height": Int(w.size.height),
-            "minimized": minimized, "fullscreen": fullscreen,
-            "focused": focused, "main": main, "modal": modal
-        ]
-        if let wid = w.windowID { dict["window_id"] = Int(wid) }
-        if let role = role { dict["role"] = role }
-        if let subrole = subrole { dict["subrole"] = subrole }
-        if let document = document { dict["document"] = document }
-        printJSON(dict)
-    } else {
-        print("index:\t\(w.id)")
-        if let wid = w.windowID { print("window_id:\t\(wid)") }
-        print("title:\t\(w.title)")
-        print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")
-        print("size:\t\(Int(w.size.width))x\(Int(w.size.height))")
-        if let role = role { print("role:\t\(role)") }
-        if let subrole = subrole { print("subrole:\t\(subrole)") }
-        print("focused:\t\(focused)")
-        print("main:\t\(main)")
-        print("minimized:\t\(minimized)")
-        print("fullscreen:\t\(fullscreen)")
-        print("modal:\t\(modal)")
-        if let document = document { print("document:\t\(document)") }
-    }
+    printWindowInfo(w)
 }
 
 // MARK: - Preview Command
@@ -1360,6 +1382,7 @@ func usage() {
 
     Commands:
       active-screen                            Print active screen bounds (x, y, width, height)
+      active-window                            Print info about the frontmost app's primary window
       columnize <w> <w> [<w>...] [--gap N]     Arrange windows side-by-side in columns
       count                                    Print number of windows
       dim <window> [--opacity 0.5] [--duration 0]  Dim everything except a window
@@ -1478,10 +1501,11 @@ let accessibilityCommands: Set<String> = [
     "border", "border-by-title", "unborder", "unborder-by-title",
     "dim", "dim-by-title",
     "preview", "preview-by-title",
-    "list-open-windows"
+    "list-open-windows",
+    "active-window"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["screens", "active-screen", "list-open-windows", "undim", "unborder-all", "help", "--help", "-h"]
+let appIndependentCommands: Set<String> = ["screens", "active-screen", "active-window", "list-open-windows", "undim", "unborder-all", "help", "--help", "-h"]
 
 do {
     if accessibilityCommands.contains(command) {
@@ -1800,6 +1824,8 @@ do {
         screensCommand()
     case "active-screen":
         activeScreenCommand()
+    case "active-window":
+        try activeWindowCommand()
     case "help", "--help", "-h":
         usage()
     default:
