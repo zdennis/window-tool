@@ -1219,7 +1219,7 @@ func previewCommand(bundleId: String, selector: WindowSelector, outputPath: Stri
 
 // MARK: - Record Command
 
-func parseRecordFlags(_ args: [String]) throws -> (output: String, fps: Int, duration: Double?) {
+func parseRecordFlags(_ args: [String]) throws -> (output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) {
     guard let outIdx = args.firstIndex(of: "--output") else {
         throw WindowToolError.invalidArgument(value: "--output", label: "flag (required, specify an output file path)")
     }
@@ -1244,7 +1244,10 @@ func parseRecordFlags(_ args: [String]) throws -> (output: String, fps: Int, dur
         duration = try parseDouble(args[durIdx + 1], label: "duration")
     }
 
-    return (output, fps, duration)
+    let countdown = !args.contains("--no-countdown")
+    let border = !args.contains("--no-border")
+
+    return (output, fps, duration, countdown, border)
 }
 
 class RecordingDelegate: NSObject, SCStreamOutput {
@@ -1315,16 +1318,46 @@ class RecordingDelegate: NSObject, SCStreamOutput {
     }
 }
 
-func recordCommand(bundleId: String, selector: WindowSelector, output: String, fps: Int, duration: Double?) throws {
-    let window = try resolveWindow(bundleId: bundleId, selector: selector)
-    guard let windowID = window.windowID else {
-        fputs("Error: Cannot record window — no window ID available\n", stderr)
-        exit(1)
-    }
+func makeRecordingBorderOverlay(frame: NSRect, color: NSColor, width: CGFloat) -> NSWindow {
+    let overlay = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+    overlay.isOpaque = false
+    overlay.backgroundColor = .clear
+    overlay.level = .floating
+    overlay.ignoresMouseEvents = true
+    overlay.hasShadow = false
+    let view = BorderView(frame: NSRect(origin: .zero, size: frame.size))
+    view.borderColor = color
+    view.borderWidth = width
+    overlay.contentView = view
+    overlay.orderFrontRegardless()
+    return overlay
+}
 
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
+func makeCountdownOverlay(frame: NSRect) -> NSWindow {
+    let overlaySize = NSSize(width: 120, height: 120)
+    let overlayX = frame.origin.x + (frame.width - overlaySize.width) / 2
+    let overlayY = frame.origin.y + (frame.height - overlaySize.height) / 2
+    let overlay = NSWindow(
+        contentRect: NSRect(origin: NSPoint(x: overlayX, y: overlayY), size: overlaySize),
+        styleMask: .borderless, backing: .buffered, defer: false
+    )
+    overlay.isOpaque = false
+    overlay.backgroundColor = NSColor.black.withAlphaComponent(0.7)
+    overlay.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+    overlay.ignoresMouseEvents = true
+    overlay.hasShadow = false
 
+    let label = NSTextField(labelWithString: "3")
+    label.font = NSFont.systemFont(ofSize: 64, weight: .bold)
+    label.textColor = .white
+    label.alignment = .center
+    label.frame = NSRect(origin: .zero, size: overlaySize)
+    overlay.contentView = label
+    overlay.orderFrontRegardless()
+    return overlay
+}
+
+func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Double?, borderOverlay: NSWindow?) {
     let semaphore = DispatchSemaphore(value: 0)
     var setupError: (any Error)?
 
@@ -1353,6 +1386,7 @@ func recordCommand(bundleId: String, selector: WindowSelector, output: String, f
             streamConfig.height = height
 
             let outputURL = URL(fileURLWithPath: (output as NSString).expandingTildeInPath)
+            try? FileManager.default.removeItem(at: outputURL)
             let fileType: AVFileType = outputURL.pathExtension.lowercased() == "mp4" ? .mp4 : .mov
             let assetWriter = try AVAssetWriter(outputURL: outputURL, fileType: fileType)
 
@@ -1387,6 +1421,9 @@ func recordCommand(bundleId: String, selector: WindowSelector, output: String, f
                 guard !stopping else { return }
                 stopping = true
                 delegate.stopFrameTimer()
+                if let overlay = borderOverlay {
+                    DispatchQueue.main.async { overlay.orderOut(nil) }
+                }
                 Task {
                     try? await stream.stopCapture()
                     videoInput.markAsFinished()
@@ -1426,14 +1463,57 @@ func recordCommand(bundleId: String, selector: WindowSelector, output: String, f
         }
     }
 
-    // If setup completed without signaling, run the app loop (recording is in progress)
-    // If setup errored, the semaphore will signal and we handle the error
     DispatchQueue.global().async {
         semaphore.wait()
         if let error = setupError {
             fputs("Error: \(error.localizedDescription)\n", stderr)
             exit(1)
         }
+    }
+}
+
+func recordCommand(bundleId: String, selector: WindowSelector, output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    guard let windowID = window.windowID else {
+        fputs("Error: Cannot record window — no window ID available\n", stderr)
+        exit(1)
+    }
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    let cocoaY = mainScreenHeight - window.position.y - window.size.height
+    let windowFrame = NSRect(x: window.position.x, y: cocoaY,
+                             width: window.size.width, height: window.size.height)
+
+    var borderOverlay: NSWindow? = nil
+
+    if countdown {
+        borderOverlay = border ? makeRecordingBorderOverlay(frame: windowFrame, color: .red, width: 4) : nil
+        let countdownOverlay = makeCountdownOverlay(frame: windowFrame)
+
+        var remaining = 3
+        fputs("Recording starts in 3...\n", stderr)
+
+        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+            remaining -= 1
+            if remaining > 0 {
+                fputs("\(remaining)...\n", stderr)
+                (countdownOverlay.contentView as? NSTextField)?.stringValue = "\(remaining)"
+            } else {
+                timer.invalidate()
+                countdownOverlay.orderOut(nil)
+                if let view = borderOverlay?.contentView as? BorderView {
+                    view.borderColor = .green
+                    view.needsDisplay = true
+                }
+                startRecording(windowID: windowID, output: output, fps: fps, duration: duration, borderOverlay: borderOverlay)
+            }
+        }
+    } else {
+        borderOverlay = border ? makeRecordingBorderOverlay(frame: windowFrame, color: .green, width: 4) : nil
+        startRecording(windowID: windowID, output: output, fps: fps, duration: duration, borderOverlay: borderOverlay)
     }
 
     app.run()
@@ -1633,8 +1713,9 @@ func usage() {
       move-to-screen-by-title <pattern> <screen>  Move window to display by title
       preview <window> [--output <path>]       Capture a window screenshot as PNG
       preview-by-title <pattern> [--output <path>]  Capture window screenshot by title
-      record <window> --output <path> [--fps 30] [--duration N]  Record video of a window
-      record-by-title <pattern> --output <path> [--fps 30] [--duration N]  Record video by title
+      record <window> --output <path> [options]  Record video of a window
+      record-by-title <pattern> --output <path> [options]  Record video by title
+        Record options: [--fps 30] [--duration <seconds>] [--no-countdown] [--no-border]
       resize <window> <width> <height>         Resize window
       resize-by-title <pattern> <width> <height>  Resize windows matching title
       restore                                  Restore all minimized windows
@@ -2052,7 +2133,7 @@ do {
         var recordArgs = Array(args.dropFirst())
         let recordSelector = try parseWindowSelector(recordArgs.removeFirst())
         let recordFlags = try parseRecordFlags(recordArgs)
-        try recordCommand(bundleId: config.bundleId, selector: recordSelector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration)
+        try recordCommand(bundleId: config.bundleId, selector: recordSelector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
     case "record-by-title":
         guard args.count >= 2 else {
             fputs("Usage: window-tool record-by-title <pattern> --output <path> [--fps 30] [--duration N]\n", stderr)
@@ -2061,7 +2142,7 @@ do {
         var recordArgs = Array(args.dropFirst())
         let pattern = recordArgs.removeFirst()
         let recordFlags = try parseRecordFlags(recordArgs)
-        try recordCommand(bundleId: config.bundleId, selector: .byTitle(pattern), output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration)
+        try recordCommand(bundleId: config.bundleId, selector: .byTitle(pattern), output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
     case "list-open-windows":
         listOpenWindowsCommand()
     case "screens":
