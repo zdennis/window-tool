@@ -10,12 +10,29 @@ let VERSION = "0.6.0"
 struct Config {
     var bundleId: String = "com.googlecode.iterm2"
     var jsonOutput: Bool = false
+    var jsonBuffer: [Any] = []
+    var chaining: Bool = false
 }
 
 var config = Config()
 
 func printJSON(_ value: Any) {
-    guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+    if config.chaining {
+        config.jsonBuffer.append(value)
+    } else {
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+              let str = String(data: data, encoding: .utf8) else {
+            fputs("Error: Failed to serialize JSON output\n", stderr)
+            exit(1)
+        }
+        print(str)
+    }
+}
+
+func flushJSONBuffer() {
+    guard !config.jsonBuffer.isEmpty else { return }
+    let output = config.jsonBuffer.count == 1 ? config.jsonBuffer[0] : config.jsonBuffer
+    guard let data = try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys]),
           let str = String(data: data, encoding: .utf8) else {
         fputs("Error: Failed to serialize JSON output\n", stderr)
         exit(1)
@@ -689,7 +706,7 @@ func highlightCommand(bundleId: String, selector: WindowSelector, color: NSColor
                            defer: false)
     overlay.isOpaque = false
     overlay.backgroundColor = .clear
-    overlay.level = .floating
+    overlay.level = .normal
     overlay.ignoresMouseEvents = true
     overlay.hasShadow = false
 
@@ -699,7 +716,12 @@ func highlightCommand(bundleId: String, selector: WindowSelector, color: NSColor
     let view = HighlightView(frame: NSRect(origin: .zero, size: overlayFrame.size))
     view.borderColor = color
     overlay.contentView = view
-    overlay.orderFrontRegardless()
+
+    if let wid = window.windowID {
+        overlay.order(.above, relativeTo: Int(wid))
+    } else {
+        overlay.orderFrontRegardless()
+    }
 
     DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
         overlay.close()
@@ -1783,6 +1805,11 @@ func usage() {
       --json              Output in JSON format
       --version, -v       Print version and exit
 
+    Command chaining:
+      Use + to run multiple commands in sequence, sharing --app and --json flags:
+      window-tool --app Safari focus 0 + highlight 0 --color red
+      window-tool --app iTerm info 0 + info 1
+
     Examples:
       window-tool list
       window-tool --app Safari list
@@ -1790,6 +1817,7 @@ func usage() {
       window-tool move 0 100 50 1200 900
       window-tool focus id=1341
       window-tool move-by-title "my-notes" 0 0 1400 1000
+      window-tool --app Safari focus 0 + highlight 0
     """
     print(help)
 }
@@ -1812,12 +1840,12 @@ if let appIdx = args.firstIndex(of: "--app") {
     args.removeSubrange(appIdx...appIdx+1)
 }
 
-guard let command = args.first else {
+guard !args.isEmpty else {
     usage()
     exit(0)
 }
 
-if command == "--version" || command == "-v" {
+if args.first == "--version" || args.first == "-v" {
     print("window-tool \(VERSION)")
     exit(0)
 }
@@ -1846,7 +1874,27 @@ let accessibilityCommands: Set<String> = [
 // Commands that don't use --app (they enumerate all apps or don't need one)
 let appIndependentCommands: Set<String> = ["screens", "active-screen", "active-window", "list-open-windows", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
 
-do {
+// Split args on "+" to support chaining multiple commands
+func splitCommands(_ args: [String]) -> [[String]] {
+    var commands: [[String]] = []
+    var current: [String] = []
+    for arg in args {
+        if arg == "+" {
+            if !current.isEmpty { commands.append(current) }
+            current = []
+        } else {
+            current.append(arg)
+        }
+    }
+    if !current.isEmpty { commands.append(current) }
+    return commands
+}
+
+let commandGroups = splitCommands(args)
+
+func runCommand(_ args: [String]) throws {
+    let command = args[0]
+
     if accessibilityCommands.contains(command) {
         try checkAccessibility()
     }
@@ -2197,7 +2245,23 @@ do {
         usage()
         exit(1)
     }
-} catch {
-    fputs("Error: \(error.localizedDescription)\n", stderr)
-    exit(1)
+}
+
+config.chaining = config.jsonOutput && commandGroups.count > 1
+
+do {
+    for (index, group) in commandGroups.enumerated() {
+        do {
+            try runCommand(group)
+        } catch {
+            if commandGroups.count > 1 {
+                fputs("Error in command \(index + 1) (\(group[0])): \(error.localizedDescription)\n", stderr)
+            } else {
+                fputs("Error: \(error.localizedDescription)\n", stderr)
+            }
+            if config.chaining { flushJSONBuffer() }
+            exit(1)
+        }
+    }
+    if config.chaining { flushJSONBuffer() }
 }
