@@ -1221,8 +1221,7 @@ func previewCommand(bundleId: String, selector: WindowSelector, outputPath: Stri
 
 func parseRecordFlags(_ args: [String]) throws -> (output: String, fps: Int, duration: Double?) {
     guard let outIdx = args.firstIndex(of: "--output") else {
-        fputs("Error: --output <path> is required\n", stderr)
-        exit(1)
+        throw WindowToolError.invalidArgument(value: "--output", label: "flag (required, specify an output file path)")
     }
     guard outIdx + 1 < args.count else {
         throw WindowToolError.invalidArgument(value: "--output", label: "flag (requires a file path)")
@@ -1383,7 +1382,10 @@ func recordCommand(bundleId: String, selector: WindowSelector, output: String, f
             fputs("Recording window \(windowID) to \(outputURL.path) (\(width)x\(height) @ \(fps)fps)\n", stderr)
             fputs("Press Ctrl-C to stop recording\n", stderr)
 
+            var stopping = false
             func stopRecording() {
+                guard !stopping else { return }
+                stopping = true
                 delegate.stopFrameTimer()
                 Task {
                     try? await stream.stopCapture()
