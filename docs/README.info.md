@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] info <window>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Details
 
@@ -25,4 +25,7 @@ window-tool info 0
 window-tool info id=1341
 window-tool info title="my-project"
 window-tool --json info 0
+
+# Chaining: info inherits the selector from focus
+window-tool focus 0 + info
 ```

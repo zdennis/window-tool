@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] snap <window> <position>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 | `<position>` | Yes | Snap position (see below) |
 
 ## Details
@@ -33,4 +33,7 @@ Available positions: `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, 
 window-tool snap 0 left
 window-tool snap 1 top-right
 window-tool snap title="Terminal" maximize
+
+# Chaining: snap inherits the selector from focus
+window-tool focus 0 + snap center
 ```

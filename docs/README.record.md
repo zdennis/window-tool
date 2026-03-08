@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] record <window> --output <path> [options]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Options
 
@@ -36,4 +36,7 @@ Prints the output file path on completion. With `--json`, outputs path, window_i
 window-tool record 0 --output ~/recording.mov
 window-tool record 0 --output ~/clip.mp4 --duration 10 --fps 60
 window-tool record title="Demo" --output demo.mov --no-countdown --no-border
+
+# Chaining: record inherits the selector from focus
+window-tool focus 0 + record --output ~/recording.mov
 ```

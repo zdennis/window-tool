@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] border <window> [--color <color>] [--width <pix
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Options
 
@@ -31,4 +31,7 @@ Runs as a background process that draws a border around the window and updates i
 window-tool border 0
 window-tool border 0 --color red --width 5
 window-tool border title="Terminal" --color green
+
+# Chaining: border inherits the selector from focus
+window-tool focus 0 + border --color red
 ```

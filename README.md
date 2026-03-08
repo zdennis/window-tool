@@ -78,6 +78,21 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 | `--json` | Output in JSON format |
 | `--version`, `-v` | Print version and exit |
 
+### Command chaining
+
+Use `+` to run multiple commands in sequence, sharing `--app` and `--json` flags. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once:
+
+```sh
+# Snap window 0 to center, then focus and highlight it (selector inherited)
+window-tool --app Safari snap 0 center + focus + highlight --color red
+
+# Each command can use its own selector
+window-tool --app iTerm info 0 + info 1
+
+# Mix explicit and inherited selectors
+window-tool focus id=2457 + highlight + dim id=2789
+```
+
 ## How it works
 
 window-tool uses the macOS Accessibility API (`AXUIElement`) for window operations, which is significantly faster than AppleScript's inter-process communication. Window operations are near-instant.

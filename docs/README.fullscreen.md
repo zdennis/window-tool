@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] fullscreen <window>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Details
 
@@ -25,4 +25,7 @@ Use `unfullscreen` to exit fullscreen mode.
 ```sh
 window-tool fullscreen 0
 window-tool fullscreen title="Safari"
+
+# Chaining: fullscreen inherits the selector from focus
+window-tool focus 0 + fullscreen
 ```

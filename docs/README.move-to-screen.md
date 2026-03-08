@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] move-to-screen <window> <screen>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 | `<screen>` | Yes | Target screen index (from `screens`) |
 
 ## Details
@@ -24,4 +24,7 @@ Moves the window to the top-left of the visible area on the target screen. Use `
 ```sh
 window-tool move-to-screen 0 1
 window-tool move-to-screen title="Terminal" 0
+
+# Chaining: move-to-screen inherits the selector from focus
+window-tool focus 0 + move-to-screen 1
 ```

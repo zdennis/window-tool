@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] dim <window> [--opacity <value>] [--duration <s
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Options
 
@@ -31,4 +31,7 @@ Creates a dark overlay across all screens with a cutout for the target window, d
 window-tool dim 0
 window-tool dim 0 --opacity 0.7 --duration 10
 window-tool dim title="Important" --opacity 0.3
+
+# Chaining: dim inherits the selector from focus
+window-tool focus 0 + dim --opacity 0.6
 ```

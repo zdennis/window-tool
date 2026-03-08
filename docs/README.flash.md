@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] flash <window> [--color <color>] [--count <N>]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Options
 
@@ -31,4 +31,7 @@ Displays a translucent colored overlay on the window that fades out. Useful for 
 window-tool flash 0
 window-tool flash 0 --color red --count 3
 window-tool flash title="Alert" --color yellow
+
+# Chaining: flash inherits the selector from focus
+window-tool focus 0 + flash --color green
 ```

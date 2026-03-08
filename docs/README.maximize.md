@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] maximize <window>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Details
 
@@ -25,4 +25,7 @@ This is not macOS fullscreen mode -- see `fullscreen` for that.
 ```sh
 window-tool maximize 0
 window-tool maximize title="Terminal"
+
+# Chaining: maximize inherits the selector from focus
+window-tool focus 0 + maximize
 ```

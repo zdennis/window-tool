@@ -24,4 +24,7 @@ Without a window selector, removes all borders for the target application. With 
 window-tool unborder
 window-tool unborder 0
 window-tool unborder id=1341
+
+# Chaining: unborder inherits the selector from the previous command
+window-tool focus 0 + unborder
 ```

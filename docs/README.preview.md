@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] preview <window> [--output <path>]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Options
 
@@ -30,4 +30,7 @@ Captures the window contents using ScreenCaptureKit and saves as PNG. Requires S
 window-tool preview 0
 window-tool preview 0 --output ~/screenshot.png
 window-tool --json preview title="Browser"
+
+# Chaining: preview inherits the selector from focus
+window-tool focus 0 + preview --output ~/screenshot.png
 ```

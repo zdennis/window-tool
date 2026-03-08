@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] focus <window>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
 
 ## Details
 
@@ -24,4 +24,7 @@ Activates the application and raises the specified window to the front.
 window-tool focus 0
 window-tool focus id=1341
 window-tool focus title="my-project"
+
+# Chaining: focus inherits the selector from snap
+window-tool snap 0 center + focus
 ```
