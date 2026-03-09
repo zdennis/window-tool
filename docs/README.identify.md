@@ -19,6 +19,8 @@ window-tool [--app <name-or-id>] identify [--color <color>] [--duration <seconds
 
 Displays a labeled overlay centered on each window showing its `id=<N>` value. The overlays auto-dismiss after the specified duration.
 
+Only windows whose center is actually visible on screen get labeled. Windows that are fully behind another window are skipped, so you only see IDs for windows you can interact with.
+
 When used without `--app`, identify shows IDs for all windows across all applications. When `--app` is provided, it only shows IDs for that application's windows.
 
 ## Examples
