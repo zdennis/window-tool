@@ -173,6 +173,33 @@ func parseBorderFlags(_ args: [String]) throws -> (color: NSColor, width: CGFloa
     return (color, width)
 }
 
+func parseSizeFlag(_ args: [String]) throws -> (CGFloat, CGFloat)? {
+    guard let sizeArg = args.first(where: { $0.hasPrefix("--size=") }) else { return nil }
+    let value = String(sizeArg.dropFirst(7))
+    if let sep = value.firstIndex(of: ",") ?? value.firstIndex(of: "x") {
+        let wStr = String(value[value.startIndex..<sep])
+        let hStr = String(value[value.index(after: sep)...])
+        let w = CGFloat(try parseDouble(wStr, label: "width"))
+        let h = CGFloat(try parseDouble(hStr, label: "height"))
+        return (w, h)
+    }
+    let n = CGFloat(try parseDouble(value, label: "size"))
+    return (n, n)
+}
+
+func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool) {
+    var side = "left"
+    var fullHeight = false
+    for arg in args {
+        if arg.hasPrefix("--side=") {
+            side = String(arg.dropFirst(7))
+        } else if arg == "--full-height" {
+            fullHeight = true
+        }
+    }
+    return (side: side, fullHeight: fullHeight)
+}
+
 // MARK: - Accessibility Helpers
 
 /// Resolves an app identifier to a bundle ID.
@@ -1185,6 +1212,44 @@ func maximizeCommand(bundleId: String, selector: WindowSelector) throws {
     }
 }
 
+/// Centers a window on its current screen, optionally resizing it first.
+func centerCommand(bundleId: String, selector: WindowSelector, size: (CGFloat, CGFloat)?) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    let bounds = screenBoundsForWindow(window)
+    let w: CGFloat
+    let h: CGFloat
+    if let (sw, sh) = size {
+        w = sw
+        h = sh
+        resizeWindow(window.element, width: w, height: h)
+    } else {
+        w = window.size.width
+        h = window.size.height
+    }
+    moveWindow(window.element, x: bounds.x + (bounds.width - w) / 2, y: bounds.y + (bounds.height - h) / 2)
+}
+
+/// Pins a window to the left or right edge of its screen as a sidebar.
+func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fullHeight: Bool) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    let bounds = screenBoundsForWindow(window)
+    let w = window.size.width
+    let h = fullHeight ? bounds.height : window.size.height
+
+    switch side {
+    case "left":
+        moveWindow(window.element, x: bounds.x, y: bounds.y)
+    case "right":
+        moveWindow(window.element, x: bounds.x + bounds.width - w, y: bounds.y)
+    default:
+        fputs("Error: '\(side)' is not a valid side (left, right)\n", stderr)
+        exit(1)
+    }
+    if fullHeight {
+        resizeWindow(window.element, width: w, height: h)
+    }
+}
+
 /// Enters macOS fullscreen mode for a window.
 func fullscreenCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
@@ -1907,6 +1972,7 @@ func usage() {
       active-screen                            Print active screen bounds (x, y, width, height)
       active-window [--id]                     Print info about the frontmost app's primary window
       border <window> [--color blue] [--width 3]    Add a persistent border that tracks a window
+      center <window> [--size=N or --size=W,H]  Center window on screen (optionally resize)
       columnize <w> <w> [<w>...] [--gap N]     Arrange windows side-by-side in columns
       count                                    Print number of windows
       dim <window> [--opacity 0.5] [--duration 0]  Dim everything except a window
@@ -1931,6 +1997,7 @@ func usage() {
       screens                                  List all displays with bounds
       shake <window> [offset] [count] [delay]  Shake a window
       shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
+      sidebar <window> [--side=left|right] [--full-height]  Pin window to screen edge as sidebar
       snap <window> <position>                 Snap window to screen region
       stack [offset]                           Cascade windows with offset (default: 30)
       unborder [<window>]                      Remove borders for target app (or one window)
@@ -2008,9 +2075,9 @@ if args.first == "--version" || args.first == "-v" {
 
 // Commands that need Accessibility access
 let accessibilityCommands: Set<String> = [
-    "list", "info", "count", "columnize",
+    "list", "info", "count", "center", "columnize",
     "move", "resize", "snap", "move-to-screen",
-    "maximize", "minimize", "restore",
+    "maximize", "minimize", "restore", "sidebar",
     "save-layout", "restore-layout", "stack", "watch",
     "fullscreen", "unfullscreen",
     "focus", "flash", "shake",
@@ -2072,6 +2139,10 @@ func runCommand(_ args: [String]) throws {
         }
         let selectors = try columnArgs.map { try parseWindowSelector($0) }
         try columnizeCommand(bundleId: config.bundleId, selectors: selectors, gap: gap)
+    case "center":
+        let (selector, rest) = try resolveSelectorWithFlags(args)
+        let size = try parseSizeFlag(rest)
+        try centerCommand(bundleId: config.bundleId, selector: selector, size: size)
     case "count":
         countCommand(bundleId: config.bundleId)
     case "move":
@@ -2105,6 +2176,10 @@ func runCommand(_ args: [String]) throws {
             exit(1)
         }
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
+    case "sidebar":
+        let (selector, rest) = try resolveSelectorWithFlags(args)
+        let (side, fullHeight) = parseSidebarFlags(rest)
+        try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight)
     case "move-to-screen":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 2)
         guard let screenArg = rest.first else {
