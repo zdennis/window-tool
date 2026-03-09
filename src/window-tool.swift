@@ -2303,6 +2303,23 @@ func runCommand(_ args: [String]) throws {
         }
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
+        if args.contains("--help") || args.contains("-h") {
+            let help = """
+            Usage: window-tool [--app <name-or-id>] sidebar <window> [options]
+                   window-tool sidebar --unpush
+
+            Pin a window to the left or right edge of its screen as a sidebar.
+
+            Options:
+              --side=left|right   Which edge to pin to (default: left)
+              --full-height       Maximize window height to fill screen
+              --push              Push overlapping windows away from the sidebar
+              --unpush            Restore windows to their pre-push positions
+              --help, -h          Show this help
+            """
+            print(help)
+            break
+        }
         let (selector, rest) = try resolveSelectorWithFlags(args)
         let (side, fullHeight, push, unpush) = parseSidebarFlags(rest)
         if unpush {
