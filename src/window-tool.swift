@@ -1879,12 +1879,46 @@ func identifyCommand(bundleId: String?, duration: Double, color: NSColor) throws
         let size: CGSize
     }
 
+    // Build z-ordered list of on-screen window rects (front-to-back) so we can
+    // skip windows whose center is occluded by a window in front of them.
+    struct OnScreenRect {
+        let windowID: CGWindowID
+        let frame: CGRect
+    }
+    let onScreenWindows: [OnScreenRect] = {
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] else {
+            return []
+        }
+        var rects: [OnScreenRect] = []
+        for entry in windowList {
+            guard let id = entry[kCGWindowNumber] as? CGWindowID,
+                  let layer = entry[kCGWindowLayer] as? Int, layer == 0,
+                  let bounds = entry[kCGWindowBounds] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"],
+                  let w = bounds["Width"], let h = bounds["Height"],
+                  w > 0, h > 0 else { continue }
+            rects.append(OnScreenRect(windowID: id, frame: CGRect(x: x, y: y, width: w, height: h)))
+        }
+        return rects
+    }()
+
+    // Returns true if the center of the window is not covered by any window in front of it.
+    func isCenterVisible(windowID: CGWindowID, center: CGPoint) -> Bool {
+        for entry in onScreenWindows {
+            if entry.windowID == windowID { return true }  // reached our window, nothing above covers it
+            if entry.frame.contains(center) { return false }  // a window in front covers the center
+        }
+        return false  // window not in the on-screen list at all
+    }
+
     var windows: [IdentifyWindow] = []
 
     if let bundleId = bundleId {
         let appElement = try requireApp(bundleId)
         for w in getWindows(appElement: appElement) {
             guard let wid = w.windowID else { continue }
+            let center = CGPoint(x: w.position.x + w.size.width / 2, y: w.position.y + w.size.height / 2)
+            guard isCenterVisible(windowID: wid, center: center) else { continue }
             windows.append(IdentifyWindow(windowID: wid, position: w.position, size: w.size))
         }
     } else {
@@ -1899,6 +1933,8 @@ func identifyCommand(bundleId: String?, duration: Double, color: NSColor) throws
                 seen.insert(bid)
                 for w in appWindows {
                     guard let wid = w.windowID else { continue }
+                    let center = CGPoint(x: w.position.x + w.size.width / 2, y: w.position.y + w.size.height / 2)
+                    guard isCenterVisible(windowID: wid, center: center) else { continue }
                     windows.append(IdentifyWindow(windowID: wid, position: w.position, size: w.size))
                 }
             }
@@ -1950,7 +1986,7 @@ func identifyCommand(bundleId: String?, duration: Double, color: NSColor) throws
         container.addSubview(label)
         overlay.contentView = container
 
-        overlay.order(.above, relativeTo: Int(w.windowID))
+        overlay.orderFrontRegardless()
         overlays.append(overlay)
     }
 
