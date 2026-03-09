@@ -40,6 +40,7 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 | `active-screen` | [README](docs/README.active-screen.md) | Print active screen bounds |
 | `active-window` | [README](docs/README.active-window.md) | Print info about the frontmost window |
 | `border` | [README](docs/README.border.md) | Add a persistent border that tracks a window |
+| `center` | [README](docs/README.center.md) | Center a window on screen, optionally resizing |
 | `columnize` | [README](docs/README.columnize.md) | Arrange windows side-by-side in columns |
 | `count` | [README](docs/README.count.md) | Print number of windows |
 | `dim` | [README](docs/README.dim.md) | Dim everything except a window |
@@ -63,6 +64,7 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 | `screens` | [README](docs/README.screens.md) | List all displays with bounds |
 | `shake` | [README](docs/README.shake.md) | Shake a window to draw attention |
 | `shell-init` | [README](docs/README.shell-init.md) | Print shell integration snippet |
+| `sidebar` | [README](docs/README.sidebar.md) | Pin a window to screen edge as a sidebar |
 | `snap` | [README](docs/README.snap.md) | Snap a window to a screen region |
 | `stack` | [README](docs/README.stack.md) | Cascade windows with offset |
 | `unborder` | [README](docs/README.unborder.md) | Remove border overlays for an app |
