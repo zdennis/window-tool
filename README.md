@@ -67,6 +67,7 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 | `sidebar` | [README](docs/README.sidebar.md) | Pin a window to screen edge as a sidebar |
 | `snap` | [README](docs/README.snap.md) | Snap a window to a screen region |
 | `stack` | [README](docs/README.stack.md) | Cascade windows with offset |
+| `tile` | [README](docs/README.tile.md) | Tile windows in a grid layout |
 | `unborder` | [README](docs/README.unborder.md) | Remove border overlays for an app |
 | `unborder-all` | [README](docs/README.unborder-all.md) | Remove all active borders |
 | `undim` | [README](docs/README.undim.md) | Remove active dim overlay |
