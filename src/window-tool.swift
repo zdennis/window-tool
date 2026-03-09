@@ -187,17 +187,36 @@ func parseSizeFlag(_ args: [String]) throws -> (CGFloat, CGFloat)? {
     return (n, n)
 }
 
-func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool) {
+func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, push: Bool, unpush: Bool) {
     var side = "left"
     var fullHeight = false
+    var push = false
+    var unpush = false
     for arg in args {
         if arg.hasPrefix("--side=") {
             side = String(arg.dropFirst(7))
         } else if arg == "--full-height" {
             fullHeight = true
+        } else if arg == "--push" {
+            push = true
+        } else if arg == "--unpush" {
+            unpush = true
         }
     }
-    return (side: side, fullHeight: fullHeight)
+    return (side: side, fullHeight: fullHeight, push: push, unpush: unpush)
+}
+
+// MARK: - Sidebar Snapshot
+
+let sidebarSnapshotFile = "/tmp/window-tool-sidebar-snapshot.json"
+
+struct SidebarWindowSnapshot: Codable {
+    let bundleId: String
+    let windowID: UInt32
+    let x: Int
+    let y: Int
+    let width: Int
+    let height: Int
 }
 
 // MARK: - Accessibility Helpers
@@ -1230,17 +1249,20 @@ func centerCommand(bundleId: String, selector: WindowSelector, size: (CGFloat, C
 }
 
 /// Pins a window to the left or right edge of its screen as a sidebar.
-func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fullHeight: Bool) throws {
+func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fullHeight: Bool, push: Bool) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     let bounds = screenBoundsForWindow(window)
     let w = window.size.width
     let h = fullHeight ? bounds.height : window.size.height
 
+    let sidebarX: CGFloat
     switch side {
     case "left":
+        sidebarX = bounds.x
         moveWindow(window.element, x: bounds.x, y: bounds.y)
     case "right":
-        moveWindow(window.element, x: bounds.x + bounds.width - w, y: bounds.y)
+        sidebarX = bounds.x + bounds.width - w
+        moveWindow(window.element, x: sidebarX, y: bounds.y)
     default:
         fputs("Error: '\(side)' is not a valid side (left, right)\n", stderr)
         exit(1)
@@ -1248,6 +1270,109 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
     if fullHeight {
         resizeWindow(window.element, width: w, height: h)
     }
+
+    if push {
+        // The sidebar's final rectangle
+        let sidebarRect = CGRect(x: sidebarX, y: bounds.y, width: w, height: h)
+        let sidebarWindowID = window.windowID
+
+        var snapshots: [SidebarWindowSnapshot] = []
+        let apps = NSWorkspace.shared.runningApplications
+        var seen = Set<String>()
+        for app in apps {
+            guard let bid = app.bundleIdentifier, !seen.contains(bid),
+                  app.activationPolicy == .regular else { continue }
+            seen.insert(bid)
+            let appElement = AXUIElementCreateApplication(app.processIdentifier)
+            let windows = getWindows(appElement: appElement)
+            for win in windows {
+                // Skip the sidebar window itself
+                if let wid = win.windowID, let sid = sidebarWindowID, wid == sid { continue }
+                // Skip windows with zero size (minimized, etc.)
+                if win.size.width <= 0 || win.size.height <= 0 { continue }
+                guard let wid = win.windowID else { continue }
+
+                // Check if window center is on the same screen
+                let winBounds = screenBoundsForWindow(win)
+                guard winBounds.x == bounds.x && winBounds.y == bounds.y &&
+                      winBounds.width == bounds.width && winBounds.height == bounds.height else { continue }
+
+                // Snapshot the window's current position
+                snapshots.append(SidebarWindowSnapshot(
+                    bundleId: bid,
+                    windowID: wid,
+                    x: Int(win.position.x),
+                    y: Int(win.position.y),
+                    width: Int(win.size.width),
+                    height: Int(win.size.height)
+                ))
+
+                // Check overlap with sidebar
+                let winRect = CGRect(x: win.position.x, y: win.position.y,
+                                     width: win.size.width, height: win.size.height)
+                if winRect.intersects(sidebarRect) {
+                    var newX = win.position.x
+                    var newW = win.size.width
+
+                    if side == "left" {
+                        // Push right: left edge of window should be at sidebar's right edge
+                        newX = sidebarRect.maxX
+                        // If the window would extend beyond screen right edge, shrink it
+                        let screenRight = bounds.x + bounds.width
+                        if newX + newW > screenRight {
+                            newW = screenRight - newX
+                        }
+                    } else {
+                        // Push left: right edge of window should be at sidebar's left edge
+                        let newRight = sidebarRect.minX
+                        // Keep the window's right edge at the sidebar's left edge
+                        newX = newRight - newW
+                        // If the window would extend beyond screen left edge, adjust
+                        if newX < bounds.x {
+                            newX = bounds.x
+                            newW = newRight - bounds.x
+                        }
+                    }
+
+                    if newW > 0 {
+                        moveWindow(win.element, x: newX, y: win.position.y)
+                        resizeWindow(win.element, width: newW, height: win.size.height)
+                    }
+                }
+            }
+        }
+
+        // Save snapshot
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(snapshots)
+        try data.write(to: URL(fileURLWithPath: sidebarSnapshotFile))
+    }
+}
+
+/// Restores windows to their pre-sidebar positions from the snapshot file.
+func sidebarUnpushCommand() throws {
+    guard FileManager.default.fileExists(atPath: sidebarSnapshotFile) else {
+        fputs("Error: No sidebar snapshot found at \(sidebarSnapshotFile)\n", stderr)
+        exit(1)
+    }
+    let data = try Data(contentsOf: URL(fileURLWithPath: sidebarSnapshotFile))
+    let snapshots = try JSONDecoder().decode([SidebarWindowSnapshot].self, from: data)
+
+    var restored = 0
+    for snap in snapshots {
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == snap.bundleId }
+        guard let app = apps.first else { continue }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let windows = getWindows(appElement: appElement)
+        guard let win = windows.first(where: { $0.windowID == snap.windowID }) else { continue }
+        moveWindow(win.element, x: CGFloat(snap.x), y: CGFloat(snap.y))
+        resizeWindow(win.element, width: CGFloat(snap.width), height: CGFloat(snap.height))
+        restored += 1
+    }
+
+    try FileManager.default.removeItem(atPath: sidebarSnapshotFile)
+    print("Restored \(restored) window(s)")
 }
 
 /// Enters macOS fullscreen mode for a window.
@@ -1997,7 +2122,8 @@ func usage() {
       screens                                  List all displays with bounds
       shake <window> [offset] [count] [delay]  Shake a window
       shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
-      sidebar <window> [--side=left|right] [--full-height]  Pin window to screen edge as sidebar
+      sidebar <window> [--side=left|right] [--full-height] [--push]  Pin window to screen edge as sidebar
+      sidebar --unpush                       Restore windows pushed by --push
       snap <window> <position>                 Snap window to screen region
       stack [offset]                           Cascade windows with offset (default: 30)
       unborder [<window>]                      Remove borders for target app (or one window)
@@ -2178,8 +2304,12 @@ func runCommand(_ args: [String]) throws {
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
         let (selector, rest) = try resolveSelectorWithFlags(args)
-        let (side, fullHeight) = parseSidebarFlags(rest)
-        try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight)
+        let (side, fullHeight, push, unpush) = parseSidebarFlags(rest)
+        if unpush {
+            try sidebarUnpushCommand()
+        } else {
+            try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, push: push)
+        }
     case "move-to-screen":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 2)
         guard let screenArg = rest.first else {
