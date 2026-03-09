@@ -206,11 +206,49 @@ func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, pus
     return (side: side, fullHeight: fullHeight, push: push, unpush: unpush)
 }
 
+func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, untile: Bool) {
+    var gap = 10
+    var cols: Int? = nil
+    var untile = false
+    if let gapIdx = args.firstIndex(of: "--gap") {
+        guard gapIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--gap", label: "flag (requires a value)")
+        }
+        gap = try parseInt(args[gapIdx + 1], label: "gap")
+        args.removeSubrange(gapIdx...gapIdx + 1)
+    }
+    if let colsIdx = args.firstIndex(of: "--cols") {
+        guard colsIdx + 1 < args.count else {
+            throw WindowToolError.invalidArgument(value: "--cols", label: "flag (requires a value)")
+        }
+        cols = try parseInt(args[colsIdx + 1], label: "cols")
+        args.removeSubrange(colsIdx...colsIdx + 1)
+    }
+    if let untileIdx = args.firstIndex(of: "--untile") {
+        untile = true
+        args.remove(at: untileIdx)
+    }
+    return (gap, cols, untile)
+}
+
 // MARK: - Sidebar Snapshot
 
 let sidebarSnapshotFile = "/tmp/window-tool-sidebar-snapshot.json"
 
 struct SidebarWindowSnapshot: Codable {
+    let bundleId: String
+    let windowID: UInt32
+    let x: Int
+    let y: Int
+    let width: Int
+    let height: Int
+}
+
+// MARK: - Tile Snapshot
+
+let tileSnapshotFile = "/tmp/window-tool-tile-snapshot.json"
+
+struct TileWindowSnapshot: Codable {
     let bundleId: String
     let windowID: UInt32
     let x: Int
@@ -2076,6 +2114,95 @@ func columnizeCommand(bundleId: String, selectors: [WindowSelector], gap: Int) t
     print("Arranged \(selected.count) window(s) in columns")
 }
 
+func calculateGrid(windowCount: Int, colsOverride: Int?) -> (rows: Int, cols: Int) {
+    let n = windowCount
+    if let override = colsOverride {
+        let cols = min(override, n)
+        let rows = Int(ceil(Double(n) / Double(cols)))
+        return (rows, cols)
+    }
+    let cols = Int(ceil(sqrt(Double(n))))
+    let rows = Int(ceil(Double(n) / Double(cols)))
+    return (rows, cols)
+}
+
+func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsOverride: Int?) throws {
+    let app = try requireApp(bundleId)
+    var windows: [WindowInfo]
+    if let selectors = selectors, !selectors.isEmpty {
+        windows = []
+        for selector in selectors {
+            windows.append(try resolveWindow(bundleId: bundleId, selector: selector))
+        }
+    } else {
+        windows = getWindows(appElement: app)
+    }
+
+    guard !windows.isEmpty else {
+        fputs("Error: No windows found\n", stderr)
+        exit(1)
+    }
+
+    let bounds = screenBoundsForWindow(windows[0])
+
+    // Snapshot all windows before moving
+    var snapshots: [TileWindowSnapshot] = []
+    for win in windows {
+        guard let wid = win.windowID else { continue }
+        snapshots.append(TileWindowSnapshot(
+            bundleId: bundleId,
+            windowID: wid,
+            x: Int(win.position.x),
+            y: Int(win.position.y),
+            width: Int(win.size.width),
+            height: Int(win.size.height)
+        ))
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let data = try encoder.encode(snapshots)
+    try data.write(to: URL(fileURLWithPath: tileSnapshotFile))
+
+    let (rows, cols) = calculateGrid(windowCount: windows.count, colsOverride: colsOverride)
+    let cellWidth = (bounds.width - CGFloat(gap) * CGFloat(cols - 1)) / CGFloat(cols)
+    let cellHeight = (bounds.height - CGFloat(gap) * CGFloat(rows - 1)) / CGFloat(rows)
+
+    for (i, window) in windows.enumerated() {
+        let row = i / cols
+        let col = i % cols
+        let x = bounds.x + CGFloat(col) * (cellWidth + CGFloat(gap))
+        let y = bounds.y + CGFloat(row) * (cellHeight + CGFloat(gap))
+        resizeWindow(window.element, width: cellWidth, height: cellHeight)
+        moveWindow(window.element, x: x, y: y)
+    }
+    print("Tiled \(windows.count) window(s) in \(rows)x\(cols) grid")
+}
+
+/// Restores windows to their pre-tile positions from the snapshot file.
+func untileCommand() throws {
+    guard FileManager.default.fileExists(atPath: tileSnapshotFile) else {
+        fputs("Error: No tile snapshot found at \(tileSnapshotFile)\n", stderr)
+        exit(1)
+    }
+    let data = try Data(contentsOf: URL(fileURLWithPath: tileSnapshotFile))
+    let snapshots = try JSONDecoder().decode([TileWindowSnapshot].self, from: data)
+
+    var restored = 0
+    for snap in snapshots {
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == snap.bundleId }
+        guard let app = apps.first else { continue }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let windows = getWindows(appElement: appElement)
+        guard let win = windows.first(where: { $0.windowID == snap.windowID }) else { continue }
+        moveWindow(win.element, x: CGFloat(snap.x), y: CGFloat(snap.y))
+        resizeWindow(win.element, width: CGFloat(snap.width), height: CGFloat(snap.height))
+        restored += 1
+    }
+
+    try FileManager.default.removeItem(atPath: tileSnapshotFile)
+    print("Restored \(restored) window(s)")
+}
+
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
 func countCommand(bundleId: String) {
     guard let app = getAppElement(bundleId: bundleId) else {
@@ -2126,6 +2253,8 @@ func usage() {
       sidebar --unpush                       Restore windows pushed by --push
       snap <window> <position>                 Snap window to screen region
       stack [offset]                           Cascade windows with offset (default: 30)
+      tile [<w>...] [--gap N] [--cols N]      Tile windows in a grid layout
+      tile --untile                            Restore windows to pre-tile positions
       unborder [<window>]                      Remove borders for target app (or one window)
       unborder-all                             Remove all active borders
       undim                                    Remove active dim overlay
@@ -2201,7 +2330,7 @@ if args.first == "--version" || args.first == "-v" {
 
 // Commands that need Accessibility access
 let accessibilityCommands: Set<String> = [
-    "list", "info", "count", "center", "columnize",
+    "list", "info", "count", "center", "columnize", "tile",
     "move", "resize", "snap", "move-to-screen",
     "maximize", "minimize", "restore", "sidebar",
     "save-layout", "restore-layout", "stack", "watch",
@@ -2265,6 +2394,32 @@ func runCommand(_ args: [String]) throws {
         }
         let selectors = try columnArgs.map { try parseWindowSelector($0) }
         try columnizeCommand(bundleId: config.bundleId, selectors: selectors, gap: gap)
+    case "tile":
+        if args.contains("--help") || args.contains("-h") {
+            let help = """
+            Usage: window-tool [--app <name-or-id>] tile [<window>...] [options]
+                   window-tool [--app <name-or-id>] tile --untile
+
+            Arrange windows in an automatically calculated grid layout.
+            With no window selectors, tiles all windows for the app.
+
+            Options:
+              --gap N             Gap between windows in pixels (default: 10)
+              --cols N            Force a specific number of columns
+              --untile            Restore windows to their pre-tile positions
+              --help, -h          Show this help
+            """
+            print(help)
+            break
+        }
+        var tileArgs = Array(args.dropFirst())
+        let tileFlags = try parseTileFlags(&tileArgs)
+        if tileFlags.untile {
+            try untileCommand()
+        } else {
+            let selectors: [WindowSelector]? = tileArgs.isEmpty ? nil : try tileArgs.map { try parseWindowSelector($0) }
+            try tileCommand(bundleId: config.bundleId, selectors: selectors, gap: tileFlags.gap, colsOverride: tileFlags.cols)
+        }
     case "center":
         let (selector, rest) = try resolveSelectorWithFlags(args)
         let size = try parseSizeFlag(rest)
