@@ -1,0 +1,205 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+
+REPO_ROOT = File.expand_path("..", __dir__)
+WORKTREE_DIR = File.join(REPO_ROOT, ".worktrees", "feature-requests")
+BRANCH = "feature-requests"
+FILE = File.join(WORKTREE_DIR, "FEATURE_REQUESTS.md")
+
+def ensure_worktree
+  return if Dir.exist?(WORKTREE_DIR)
+
+  puts "Setting up feature-requests worktree..."
+  system("git", "-C", REPO_ROOT, "worktree", "add", WORKTREE_DIR, BRANCH, exception: true)
+end
+
+def read_file
+  ensure_worktree
+  File.read(FILE)
+end
+
+def write_file(content)
+  File.write(FILE, content)
+end
+
+def commit_and_push(message)
+  system("git", "-C", WORKTREE_DIR, "add", "FEATURE_REQUESTS.md", exception: true)
+  system("git", "-C", WORKTREE_DIR, "commit", "-m", message, exception: true)
+  system("git", "-C", WORKTREE_DIR, "push", exception: true)
+end
+
+def parse_sections(content)
+  open_match = content.match(/^## Open\n(.*?)^## Completed/m)
+  completed_match = content.match(/^## Completed\n(.*)\z/m)
+
+  open_items = open_match ? parse_items(open_match[1]) : []
+  completed_items = completed_match ? parse_items(completed_match[1]) : []
+
+  [open_items, completed_items]
+end
+
+def parse_items(text)
+  items = []
+  current = nil
+  text.each_line do |line|
+    if line.match?(/^### FR-\d+:/)
+      items << current if current
+      current = line
+    elsif current
+      current += line
+    end
+  end
+  items << current if current
+  items
+end
+
+def next_fr_number(open_items, completed_items)
+  all = open_items + completed_items
+  max = all.map { |item| item.match(/^### FR-(\d+):/)[1].to_i }.max || 0
+  max + 1
+end
+
+def rebuild_file(open_items, completed_items)
+  content = "# window-tool Feature Requests\n\n"
+  content += "Feature requests and ideas for the macOS CLI window management tool.\n\n"
+  content += "## Open\n\n"
+  if open_items.empty?
+    content += "_None._\n\n"
+  else
+    content += open_items.join("\n")
+    content += "\n"
+  end
+  content += "## Completed\n\n"
+  if completed_items.empty?
+    content += "_None yet._\n"
+  else
+    content += completed_items.join("\n")
+    content += "\n"
+  end
+  content
+end
+
+def cmd_list
+  content = read_file
+  open_items, completed_items = parse_sections(content)
+
+  if open_items.empty? && completed_items.empty?
+    puts "No feature requests yet. Use 'create' to add one."
+    return
+  end
+
+  unless open_items.empty?
+    puts "Open:"
+    open_items.each do |item|
+      title = item.lines.first.strip
+      puts "  #{title}"
+    end
+    puts
+  end
+
+  unless completed_items.empty?
+    puts "Completed:"
+    completed_items.each do |item|
+      title = item.lines.first.strip
+      puts "  #{title}"
+    end
+  end
+end
+
+def cmd_create
+  content = read_file
+  open_items, completed_items = parse_sections(content)
+  number = next_fr_number(open_items, completed_items)
+
+  print "Title: "
+  title = $stdin.gets&.strip
+  abort "Aborted." if title.nil? || title.empty?
+
+  print "Description (one line): "
+  description = $stdin.gets&.strip || ""
+
+  item = "### FR-#{number}: #{title}\n\n#{description}\n\n"
+  open_items << item
+
+  write_file(rebuild_file(open_items, completed_items))
+  commit_and_push("Add FR-#{number}: #{title}")
+  puts "Created FR-#{number}: #{title}"
+end
+
+def cmd_update
+  ensure_worktree
+  editor = ENV["EDITOR"] || "vim"
+  system(editor, FILE)
+
+  # Check if there are changes to commit
+  status = `git -C #{WORKTREE_DIR} status --porcelain FEATURE_REQUESTS.md`.strip
+  if status.empty?
+    puts "No changes."
+  else
+    print "Commit message [Update feature requests]: "
+    message = $stdin.gets&.strip
+    message = "Update feature requests" if message.nil? || message.empty?
+    commit_and_push(message)
+    puts "Updated and pushed."
+  end
+end
+
+def cmd_complete
+  content = read_file
+  open_items, completed_items = parse_sections(content)
+
+  if open_items.empty?
+    puts "No open feature requests."
+    return
+  end
+
+  puts "Open feature requests:"
+  open_items.each_with_index do |item, i|
+    title = item.lines.first.strip
+    puts "  #{i + 1}. #{title}"
+  end
+
+  print "\nComplete which? (number): "
+  choice = $stdin.gets&.strip&.to_i
+  abort "Aborted." if choice.nil? || choice < 1 || choice > open_items.size
+
+  item = open_items.delete_at(choice - 1)
+  fr_title = item.lines.first.strip
+  completed_items << item
+
+  write_file(rebuild_file(open_items, completed_items))
+  commit_and_push("Complete #{fr_title.sub(/^### /, '')}")
+  puts "Completed: #{fr_title}"
+end
+
+def cmd_help
+  puts <<~HELP
+    Usage: script/feature-requests [command]
+
+    Commands:
+      list      Show all feature requests (default)
+      create    Add a new feature request (interactive)
+      update    Open FEATURE_REQUESTS.md in $EDITOR
+      complete  Move an open request to Completed (interactive)
+      help      Show this help
+
+    Feature requests live on the 'feature-requests' orphan branch
+    and are managed via a git worktree at .worktrees/feature-requests/.
+  HELP
+end
+
+command = ARGV[0] || "list"
+
+case command
+when "list" then cmd_list
+when "create" then cmd_create
+when "update" then cmd_update
+when "complete" then cmd_complete
+when "help", "--help", "-h" then cmd_help
+else
+  $stderr.puts "Unknown command: #{command}"
+  cmd_help
+  exit 1
+end

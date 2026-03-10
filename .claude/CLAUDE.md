@@ -7,6 +7,8 @@ See [README.md](../README.md) for full usage, commands, and examples.
 ## Project structure
 
 - `src/window-tool.swift` — Single-file Swift source
+- `bin/` — Project executables (compiled binary)
+- `script/` — Dev tooling (feature requests, etc.)
 - `build.sh` — Compiles the binary to `bin/window-tool`
 - `release.sh` — Tags and pushes semver releases
 
@@ -15,6 +17,20 @@ See [README.md](../README.md) for full usage, commands, and examples.
 1. Edit `src/window-tool.swift`
 2. Run `./build.sh` to compile
 3. Test with `./bin/window-tool <command>`
+
+## Feature requests
+
+Feature requests live in `.worktrees/feature-requests/FEATURE_REQUESTS.md` on the orphan `feature-requests` branch.
+
+- **Read/edit directly** via the worktree path: `.worktrees/feature-requests/FEATURE_REQUESTS.md`
+- **Commit changes** with: `git -C .worktrees/feature-requests add -A && git -C .worktrees/feature-requests commit -m "message" && git -C .worktrees/feature-requests push`
+- **Quick view/manage** via: `script/feature-requests` (list, create, update, complete, help)
+- **Never** create feature request files on main or feature branches
+
+## Conventions
+
+- `bin/` is for project executables (the compiled `window-tool` binary)
+- `script/` is for dev tooling (feature requests management, etc.)
 
 ## Releasing
 
