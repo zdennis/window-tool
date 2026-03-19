@@ -3,7 +3,7 @@ import Cocoa
 import Foundation
 import ScreenCaptureKit
 
-let VERSION = "0.16.1"
+let VERSION = "0.17.0"
 
 // MARK: - Configuration
 
