@@ -2044,9 +2044,10 @@ func pickCommand() {
             exit(1)
         }
 
-        // Walk front-to-back, find first normal-layer window containing the click
+        // Walk front-to-back, find first window containing the click
+        // Layer 0 = normal windows, layer > 0 = modal/panel windows
         for entry in windowList {
-            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0,
+            guard let layer = entry[kCGWindowLayer] as? Int, layer >= 0,
                   let bounds = entry[kCGWindowBounds] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"],
                   let w = bounds["Width"], let h = bounds["Height"],
