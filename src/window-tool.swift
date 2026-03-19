@@ -2009,6 +2009,54 @@ func identifyCommand(bundleId: String?, duration: Double, color: NSColor) throws
     app.run()
 }
 
+// MARK: - Pick Command
+
+/// Waits for the user to click on a window, then prints its CGWindowID.
+func pickCommand() {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    fputs("Click on a window to get its ID...\n", stderr)
+
+    NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { _ in
+        // NSEvent.mouseLocation gives screen coordinates (bottom-left origin)
+        let screenPoint = NSEvent.mouseLocation
+        // CGWindowList uses top-left origin
+        let mainScreenHeight = NSScreen.screens[0].frame.height
+        let cgPoint = CGPoint(x: screenPoint.x, y: mainScreenHeight - screenPoint.y)
+
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] else {
+            fputs("Error: Could not get window list\n", stderr)
+            exit(1)
+        }
+
+        // Walk front-to-back, find first normal-layer window containing the click
+        for entry in windowList {
+            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0,
+                  let bounds = entry[kCGWindowBounds] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"],
+                  let w = bounds["Width"], let h = bounds["Height"],
+                  w > 0, h > 0,
+                  let windowID = entry[kCGWindowNumber] as? CGWindowID else { continue }
+
+            let rect = CGRect(x: x, y: y, width: w, height: h)
+            if rect.contains(cgPoint) {
+                if config.jsonOutput {
+                    printJSON(["window_id": Int(windowID)])
+                } else {
+                    print("id=\(windowID)")
+                }
+                exit(0)
+            }
+        }
+
+        fputs("No window found at click location\n", stderr)
+        exit(1)
+    }
+
+    app.run()
+}
+
 // MARK: - Layout Types
 
 struct WindowSnapshot: Codable {
@@ -2281,6 +2329,7 @@ func usage() {
       minimize <window>                        Minimize a window
       move <window> <x> <y> [<w> <h>]          Move/resize window
       move-to-screen <window> <screen>         Move window to a different display
+      pick                                     Click a window to get its ID
       preview <window> [--output <path>]       Capture a window screenshot as PNG
       record <window> --output <path> [options]  Record video of a window
         Record options: [--fps 30] [--duration <seconds>] [--no-countdown] [--no-border]
@@ -2383,7 +2432,7 @@ let accessibilityCommands: Set<String> = [
     "active-window"
 ]
 // Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["list", "identify", "screens", "active-screen", "active-window", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
+let appIndependentCommands: Set<String> = ["list", "identify", "pick", "screens", "active-screen", "active-window", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
 
 // Split args on "+" to support chaining multiple commands
 func splitCommands(_ args: [String]) -> [[String]] {
@@ -2575,6 +2624,8 @@ func runCommand(_ args: [String]) throws {
         let (selector, rest) = try resolveSelectorWithFlags(args)
         let hlFlags = try parseHighlightFlags(rest)
         try highlightCommand(bundleId: config.bundleId, selector: selector, color: hlFlags.color, duration: hlFlags.duration)
+    case "pick":
+        pickCommand()
     case "identify":
         var identifyDuration = 3.0
         var identifyColor: NSColor = .magenta
