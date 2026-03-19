@@ -327,6 +327,29 @@ struct WindowInfo {
     let windowID: CGWindowID?
 }
 
+/// Builds a WindowInfo from an AXUIElement window, or returns nil if position/size can't be read.
+func makeWindowInfo(element: AXUIElement, id: Int) -> WindowInfo? {
+    var titleRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef)
+    let title = titleRef as? String ?? ""
+
+    var posRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef)
+    var position = CGPoint.zero
+    if let posRef = posRef {
+        AXValueGetValue(posRef as! AXValue, .cgPoint, &position)
+    }
+
+    var sizeRef: CFTypeRef?
+    AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
+    var size = CGSize.zero
+    if let sizeRef = sizeRef {
+        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+    }
+
+    return WindowInfo(element: element, id: id, title: title, position: position, size: size, windowID: getCGWindowID(element))
+}
+
 /// Retrieves all windows for the given application element.
 /// Each window is returned as a `WindowInfo` with its index, title, position, and size.
 func getWindows(appElement: AXUIElement) -> [WindowInfo] {
@@ -336,26 +359,9 @@ func getWindows(appElement: AXUIElement) -> [WindowInfo] {
 
     var result: [WindowInfo] = []
     for (index, window) in windows.enumerated() {
-        var titleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef)
-        let title = titleRef as? String ?? ""
-
-        var posRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef)
-        var position = CGPoint.zero
-        if let posRef = posRef {
-            // AXValue is a CFTypeRef subtype; the AX API guarantees this cast for position attributes
-            AXValueGetValue(posRef as! AXValue, .cgPoint, &position)
+        if let info = makeWindowInfo(element: window, id: index) {
+            result.append(info)
         }
-
-        var sizeRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef)
-        var size = CGSize.zero
-        if let sizeRef = sizeRef {
-            AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
-        }
-
-        result.append(WindowInfo(element: window, id: index, title: title, position: position, size: size, windowID: getCGWindowID(window)))
     }
     return result
 }
@@ -470,11 +476,59 @@ func resolveWindow(bundleId: String, selector: WindowSelector) throws -> WindowI
         }
         return window
     case .byWindowID(let windowID):
-        guard let window = windows.first(where: { $0.windowID == windowID }) else {
-            throw WindowToolError.noWindowMatchingID(windowID)
+        if let window = windows.first(where: { $0.windowID == windowID }) {
+            return window
         }
+        // Fall back: check child windows (sheets, dialogs, modals)
+        if let found = findChildWindow(windowID: windowID, in: windows) {
+            return found
+        }
+        // Fall back: find the owning app via CGWindowList and search there
+        if let found = findWindowByID(windowID) {
+            return found
+        }
+        throw WindowToolError.noWindowMatchingID(windowID)
+    }
+}
+
+/// Finds a window by CGWindowID across all running apps using CGWindowList to identify the owner.
+func findWindowByID(_ windowID: CGWindowID) -> WindowInfo? {
+    guard let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[CFString: Any]] else {
+        return nil
+    }
+    // Find the owning PID for this window ID
+    guard let entry = windowList.first(where: { ($0[kCGWindowNumber] as? CGWindowID) == windowID }),
+          let pid = entry[kCGWindowOwnerPID] as? pid_t else {
+        return nil
+    }
+    let appElement = AXUIElementCreateApplication(pid)
+    let windows = getWindows(appElement: appElement)
+    if let window = windows.first(where: { $0.windowID == windowID }) {
         return window
     }
+    // Check child windows of that app
+    return findChildWindow(windowID: windowID, in: windows)
+}
+
+/// Searches child elements (sheets, dialogs) of the given windows for a matching CGWindowID.
+func findChildWindow(windowID: CGWindowID, in windows: [WindowInfo]) -> WindowInfo? {
+    for (parentIndex, parent) in windows.enumerated() {
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(parent.element, kAXChildrenAttribute as CFString, &childrenRef)
+        guard let children = childrenRef as? [AXUIElement] else { continue }
+        for child in children {
+            var roleRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleRef)
+            let role = roleRef as? String ?? ""
+            // Check windows, sheets, dialogs, and similar roles
+            guard role == kAXWindowRole as String || role == kAXSheetRole as String
+                  || role == "AXDialog" else { continue }
+            if let childID = getCGWindowID(child), childID == windowID {
+                return makeWindowInfo(element: child, id: parentIndex)
+            }
+        }
+    }
+    return nil
 }
 
 func resolveAllWindows(bundleId: String, selector: WindowSelector) throws -> [WindowInfo] {
@@ -493,10 +547,16 @@ func resolveAllWindows(bundleId: String, selector: WindowSelector) throws -> [Wi
         }
         return matching
     case .byWindowID(let windowID):
-        guard let window = windows.first(where: { $0.windowID == windowID }) else {
-            throw WindowToolError.noWindowMatchingID(windowID)
+        if let window = windows.first(where: { $0.windowID == windowID }) {
+            return [window]
         }
-        return [window]
+        if let found = findChildWindow(windowID: windowID, in: windows) {
+            return [found]
+        }
+        if let found = findWindowByID(windowID) {
+            return [found]
+        }
+        throw WindowToolError.noWindowMatchingID(windowID)
     }
 }
 
