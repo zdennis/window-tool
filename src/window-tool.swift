@@ -8,7 +8,7 @@ let VERSION = "0.16.1"
 // MARK: - Configuration
 
 struct Config {
-    var bundleId: String = "com.googlecode.iterm2"
+    var bundleId: String = ""
     var appExplicit: Bool = false
     var jsonOutput: Bool = false
     var jsonBuffer: [Any] = []
@@ -455,6 +455,10 @@ func resolveSelectorWithFlags(_ args: [String]) throws -> (selector: WindowSelec
 }
 
 func requireApp(_ bundleId: String) throws -> AXUIElement {
+    guard !bundleId.isEmpty else {
+        fputs("Error: --app is required for this command\n", stderr)
+        exit(1)
+    }
     guard let app = getAppElement(bundleId: bundleId) else {
         throw WindowToolError.appNotFound(bundleId)
     }
@@ -462,6 +466,14 @@ func requireApp(_ bundleId: String) throws -> AXUIElement {
 }
 
 func resolveWindow(bundleId: String, selector: WindowSelector) throws -> WindowInfo {
+    // For byWindowID with no --app, go straight to cross-app lookup
+    if case .byWindowID(let windowID) = selector, bundleId.isEmpty {
+        if let found = findWindowByID(windowID) {
+            return found
+        }
+        throw WindowToolError.noWindowMatchingID(windowID)
+    }
+
     let app = try requireApp(bundleId)
     let windows = getWindows(appElement: app)
     switch selector {
@@ -532,6 +544,13 @@ func findChildWindow(windowID: CGWindowID, in windows: [WindowInfo]) -> WindowIn
 }
 
 func resolveAllWindows(bundleId: String, selector: WindowSelector) throws -> [WindowInfo] {
+    if case .byWindowID(let windowID) = selector, bundleId.isEmpty {
+        if let found = findWindowByID(windowID) {
+            return [found]
+        }
+        throw WindowToolError.noWindowMatchingID(windowID)
+    }
+
     let app = try requireApp(bundleId)
     let windows = getWindows(appElement: app)
     switch selector {
@@ -2442,7 +2461,7 @@ func usage() {
       red, green, blue, yellow, orange, purple, white, cyan, magenta, random
 
     Options:
-      --app <name-or-id>  Target application by name or bundle ID (default: com.googlecode.iterm2)
+      --app <name-or-id>  Target application by name or bundle ID
       --json              Output in JSON format
       --version, -v       Print version and exit
 
@@ -2534,7 +2553,7 @@ func runCommand(_ args: [String]) throws {
         try checkAccessibility()
     }
 
-    if !appIndependentCommands.contains(command) {
+    if !appIndependentCommands.contains(command) && !config.bundleId.isEmpty {
         config.bundleId = try resolveAppIdentifier(config.bundleId)
     }
 

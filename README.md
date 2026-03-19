@@ -31,7 +31,7 @@ The compiled binary is placed in `bin/window-tool`.
 window-tool [--app <bundle-id>] <command> [args...]
 ```
 
-By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to target a different application.
+Use `--app` to target a specific application by name or bundle ID. When using `id=` window selectors, `--app` is optional — the owning app is detected automatically.
 
 ### Commands
 
@@ -78,7 +78,7 @@ By default, window-tool targets iTerm2 (`com.googlecode.iterm2`). Use `--app` to
 
 | Option | Description |
 |--------|-------------|
-| `--app <name-or-id>` | Target application by name or bundle ID (default: `com.googlecode.iterm2`) |
+| `--app <name-or-id>` | Target application by name or bundle ID |
 | `--json` | Output in JSON format |
 | `--version`, `-v` | Print version and exit |
 
