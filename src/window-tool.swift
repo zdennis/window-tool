@@ -1708,6 +1708,9 @@ func makeCountdownOverlay(frame: NSRect) -> NSWindow {
     return overlay
 }
 
+// Retained to prevent deallocation which would cancel the signal handlers.
+var recordingSignalSources: [Any] = []
+
 func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Double?, borderOverlay: NSWindow?) {
     let semaphore = DispatchSemaphore(value: 0)
     var setupError: (any Error)?
@@ -1798,6 +1801,9 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
             let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
             termSource.setEventHandler { stopRecording() }
             termSource.resume()
+
+            // Keep signal sources alive — they cancel on dealloc
+            recordingSignalSources = [intSource, termSource]
 
             if let duration = duration {
                 DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
