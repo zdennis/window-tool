@@ -187,9 +187,10 @@ func parseSizeFlag(_ args: [String]) throws -> (CGFloat, CGFloat)? {
     return (n, n)
 }
 
-func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, push: Bool, unpush: Bool) {
+func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, fullWidth: Bool, push: Bool, unpush: Bool) {
     var side = "left"
     var fullHeight = false
+    var fullWidth = false
     var push = false
     var unpush = false
     for arg in args {
@@ -197,13 +198,15 @@ func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, pus
             side = String(arg.dropFirst(7))
         } else if arg == "--full-height" {
             fullHeight = true
+        } else if arg == "--full-width" {
+            fullWidth = true
         } else if arg == "--push" {
             push = true
         } else if arg == "--unpush" {
             unpush = true
         }
     }
-    return (side: side, fullHeight: fullHeight, push: push, unpush: unpush)
+    return (side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push, unpush: unpush)
 }
 
 func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, untile: Bool) {
@@ -1287,25 +1290,33 @@ func centerCommand(bundleId: String, selector: WindowSelector, size: (CGFloat, C
 }
 
 /// Pins a window to the left or right edge of its screen as a sidebar.
-func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fullHeight: Bool, push: Bool) throws {
+func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fullHeight: Bool, fullWidth: Bool, push: Bool) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     let bounds = screenBoundsForWindow(window)
-    let w = window.size.width
+    let w = fullWidth ? bounds.width : window.size.width
     let h = fullHeight ? bounds.height : window.size.height
 
     let sidebarX: CGFloat
+    let sidebarY: CGFloat
     switch side {
     case "left":
         sidebarX = bounds.x
-        moveWindow(window.element, x: bounds.x, y: bounds.y)
+        sidebarY = bounds.y
     case "right":
         sidebarX = bounds.x + bounds.width - w
-        moveWindow(window.element, x: sidebarX, y: bounds.y)
+        sidebarY = bounds.y
+    case "top":
+        sidebarX = bounds.x
+        sidebarY = bounds.y
+    case "bottom":
+        sidebarX = bounds.x
+        sidebarY = bounds.y + bounds.height - h
     default:
-        fputs("Error: '\(side)' is not a valid side (left, right)\n", stderr)
+        fputs("Error: '\(side)' is not a valid side (left, right, top, bottom)\n", stderr)
         exit(1)
     }
-    if fullHeight {
+    moveWindow(window.element, x: sidebarX, y: sidebarY)
+    if fullHeight || fullWidth {
         resizeWindow(window.element, width: w, height: h)
     }
 
@@ -1350,31 +1361,34 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
                                      width: win.size.width, height: win.size.height)
                 if winRect.intersects(sidebarRect) {
                     var newX = win.position.x
+                    var newY = win.position.y
                     var newW = win.size.width
+                    var newH = win.size.height
 
-                    if side == "left" {
-                        // Push right: left edge of window should be at sidebar's right edge
+                    switch side {
+                    case "left":
                         newX = sidebarRect.maxX
-                        // If the window would extend beyond screen right edge, shrink it
                         let screenRight = bounds.x + bounds.width
-                        if newX + newW > screenRight {
-                            newW = screenRight - newX
-                        }
-                    } else {
-                        // Push left: right edge of window should be at sidebar's left edge
+                        if newX + newW > screenRight { newW = screenRight - newX }
+                    case "right":
                         let newRight = sidebarRect.minX
-                        // Keep the window's right edge at the sidebar's left edge
                         newX = newRight - newW
-                        // If the window would extend beyond screen left edge, adjust
-                        if newX < bounds.x {
-                            newX = bounds.x
-                            newW = newRight - bounds.x
-                        }
+                        if newX < bounds.x { newX = bounds.x; newW = newRight - bounds.x }
+                    case "top":
+                        newY = sidebarRect.maxY
+                        let screenBottom = bounds.y + bounds.height
+                        if newY + newH > screenBottom { newH = screenBottom - newY }
+                    case "bottom":
+                        let newBottom = sidebarRect.minY
+                        newY = newBottom - newH
+                        if newY < bounds.y { newY = bounds.y; newH = newBottom - bounds.y }
+                    default:
+                        break
                     }
 
-                    if newW > 0 {
-                        moveWindow(win.element, x: newX, y: win.position.y)
-                        resizeWindow(win.element, width: newW, height: win.size.height)
+                    if newW > 0 && newH > 0 {
+                        moveWindow(win.element, x: newX, y: newY)
+                        resizeWindow(win.element, width: newW, height: newH)
                     }
                 }
             }
@@ -2340,7 +2354,7 @@ func usage() {
       screens                                  List all displays with bounds
       shake <window> [offset] [count] [delay]  Shake a window
       shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
-      sidebar <window> [--side=left|right] [--full-height] [--push]  Pin window to screen edge as sidebar
+      sidebar <window> [--side=left|right|top|bottom] [options]  Pin window to screen edge
       sidebar --unpush                       Restore windows pushed by --push
       snap <window> <position>                 Snap window to screen region
       stack [offset]                           Cascade windows with offset (default: 30)
@@ -2554,11 +2568,12 @@ func runCommand(_ args: [String]) throws {
             Usage: window-tool [--app <name-or-id>] sidebar <window> [options]
                    window-tool sidebar --unpush
 
-            Pin a window to the left or right edge of its screen as a sidebar.
+            Pin a window to an edge of its screen as a sidebar.
 
             Options:
-              --side=left|right   Which edge to pin to (default: left)
+              --side=left|right|top|bottom  Which edge to pin to (default: left)
               --full-height       Maximize window height to fill screen
+              --full-width        Maximize window width to fill screen
               --push              Push overlapping windows away from the sidebar
               --unpush            Restore windows to their pre-push positions
               --help, -h          Show this help
@@ -2567,11 +2582,11 @@ func runCommand(_ args: [String]) throws {
             break
         }
         let (selector, rest) = try resolveSelectorWithFlags(args)
-        let (side, fullHeight, push, unpush) = parseSidebarFlags(rest)
+        let (side, fullHeight, fullWidth, push, unpush) = parseSidebarFlags(rest)
         if unpush {
             try sidebarUnpushCommand()
         } else {
-            try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, push: push)
+            try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
         }
     case "move-to-screen":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 2)
