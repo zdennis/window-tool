@@ -829,10 +829,24 @@ func moveCommand(bundleId: String, selector: WindowSelector, x: CGFloat, y: CGFl
 /// Brings a window to the front. Activates the application and raises the window.
 func focusCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
-    let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
-    runningApps.first?.activate()
+    // Activate the owning app — find by bundleId or by window's PID
+    if !bundleId.isEmpty {
+        let runningApps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
+        runningApps.first?.activate()
+    } else if let wid = window.windowID {
+        activateAppOwningWindow(wid)
+    }
     AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
     AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+}
+
+/// Activates the application that owns the given window ID.
+func activateAppOwningWindow(_ windowID: CGWindowID) {
+    guard let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[CFString: Any]],
+          let entry = windowList.first(where: { ($0[kCGWindowNumber] as? CGWindowID) == windowID }),
+          let pid = entry[kCGWindowOwnerPID] as? pid_t else { return }
+    let app = NSWorkspace.shared.runningApplications.first { $0.processIdentifier == pid }
+    app?.activate()
 }
 
 /// Shakes a window horizontally to draw attention, then restores its position.
