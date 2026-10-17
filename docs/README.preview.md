@@ -18,7 +18,7 @@ window-tool [--app <name-or-id>] preview <window> [--output <path>]
 
 | Option | Description |
 |--------|-------------|
-| `--output <path>` | Output file path (default: `/tmp/window-tool-preview-<wid>.png`) |
+| `--output <path>` | Output file path (default: `$TMPDIR/window-tool-preview-<wid>.png`) |
 
 ## Details
 

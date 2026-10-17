@@ -39,7 +39,7 @@ The grid layout is calculated automatically based on window count:
 
 Use `--cols N` to override the automatic column count.
 
-Before tiling, all window positions and sizes are snapshotted to `/tmp/window-tool-tile-snapshot.json`. Use `--untile` to restore windows to their original layout.
+Before tiling, all window positions and sizes are snapshotted to `window-tool-tile-snapshot.json` in your per-user temporary directory (`$TMPDIR`). Use `--untile` to restore windows to their original layout.
 
 All windows are tiled onto the screen containing the first window in the list.
 

@@ -279,7 +279,7 @@ func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, unt
 
 // MARK: - Sidebar Snapshot
 
-let sidebarSnapshotFile = "/tmp/window-tool-sidebar-snapshot.json"
+let sidebarSnapshotFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-sidebar-snapshot.json")
 
 struct SidebarWindowSnapshot: Codable {
     let bundleId: String
@@ -292,7 +292,7 @@ struct SidebarWindowSnapshot: Codable {
 
 // MARK: - Tile Snapshot
 
-let tileSnapshotFile = "/tmp/window-tool-tile-snapshot.json"
+let tileSnapshotFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-tile-snapshot.json")
 
 struct TileWindowSnapshot: Codable {
     let bundleId: String
@@ -1560,7 +1560,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(snapshots)
-        try data.write(to: URL(fileURLWithPath: sidebarSnapshotFile))
+        try data.write(to: URL(fileURLWithPath: sidebarSnapshotFile), options: .atomic)
     }
 }
 
@@ -1721,10 +1721,10 @@ func previewCommand(bundleId: String, selector: WindowSelector, outputPath: Stri
     if let path = outputPath {
         resolvedPath = (path as NSString).expandingTildeInPath
     } else {
-        resolvedPath = "/tmp/window-tool-preview-\(windowID).png"
+        resolvedPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-preview-\(windowID).png")
     }
     let url = URL(fileURLWithPath: resolvedPath)
-    try pngData.write(to: url)
+    try pngData.write(to: url, options: .atomic)
 
     if config.jsonOutput {
         printJSON([
@@ -2420,7 +2420,7 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(snapshots)
-    try data.write(to: URL(fileURLWithPath: tileSnapshotFile))
+    try data.write(to: URL(fileURLWithPath: tileSnapshotFile), options: .atomic)
 
     let (rows, cols) = calculateGrid(windowCount: windows.count, colsOverride: colsOverride)
     let cellWidth = (bounds.width - CGFloat(gap) * CGFloat(cols - 1)) / CGFloat(cols)
