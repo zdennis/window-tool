@@ -42,7 +42,7 @@ Tiling saves the windows' previous frames in the undo history, like every comman
 
 All windows are tiled onto the screen containing the first window in the list.
 
-With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window.
 
 ## Examples
 

@@ -29,7 +29,7 @@ A document with unsaved changes answers with a sheet ("Do you want to save chang
 
 A window with no close button, or one that is still open after the wait, fails with `operation_failed` (exit 1).
 
-Closing cannot be undone, and `close --all` takes every window of the app, so check with `list` first. `--json` prints `{"windows": [], "warnings": []}` because closed windows no longer exist to be re-read; see [Mutating command results](../README.md#mutating-command-results).
+Closing cannot be undone, and `close --all` takes every window of the app, so check with `list` first. `--json` prints `{"windows": [], "warnings": []}` because closed windows no longer exist to be re-read; see [Mutating command results](../README.md#mutating-command-results). `--verbose` adds nothing: the `Closed N window(s)` line already confirms it.
 
 ## Examples
 

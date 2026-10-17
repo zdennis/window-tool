@@ -30,7 +30,7 @@ Without `--size`, the window is centered using its current dimensions. When `--s
 
 The command uses the screen that currently contains the window to determine centering bounds.
 
-With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window.
 
 ## Examples
 

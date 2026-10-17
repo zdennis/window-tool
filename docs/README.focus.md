@@ -18,7 +18,7 @@ window-tool [--app <name-or-id>] focus <window>
 
 Activates the application and raises the specified window to the front.
 
-With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window.
 
 ## Examples
 

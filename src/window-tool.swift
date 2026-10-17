@@ -13,6 +13,8 @@ struct Config {
     var exactApp: Bool = false
     var jsonOutput: Bool = false
     var keepGoing: Bool = false
+    /// `--verbose`: after a command that changes windows, print a line for each window it changed (text output only).
+    var verbose: Bool = false
     var firstMatch: Bool = false
     var jsonChaining: Bool = false
     var chaining: Bool = false
@@ -133,7 +135,7 @@ enum WindowToolError: LocalizedError {
     /// `hint` is added after the first line (the main loop's catch adds one when a change of --app dropped the inherited selector).
     case missingWindowSelector(command: String, hint: String? = nil)
     case unknownOption(String, command: String)
-    /// `command` is nil for a repeated global flag (--json, --first, --keep-going, --exact), which belongs to no command, and for an --app repeated in a chain part that has no command.
+    /// `command` is nil for a repeated global flag (--json, --first, --keep-going, --exact, --verbose), which belongs to no command, and for an --app repeated in a chain part that has no command.
     case repeatedOption(String, command: String?)
     case unexpectedArgument(String, command: String, conflictsWith: String? = nil)
     /// `command` is nil when thrown by takeOption; the top-level catch fills it in.
@@ -664,6 +666,9 @@ func getCGWindowID(_ element: AXUIElement) -> CGWindowID? {
 /// Rounds an AX position or size to the nearest integer (AX reports fractional values on Retina displays). Capture pixel sizes in preview/record deliberately keep truncating.
 func roundedInt(_ v: CGFloat) -> Int { v.isNaN ? 0 : Int(max(-maxCoordinate, min(maxCoordinate, Double(v))).rounded()) }
 
+/// A frame as whole points, for telling whether a window ended where it started.
+func roundedFrame(_ r: CGRect) -> [Int] { [r.origin.x, r.origin.y, r.width, r.height].map(roundedInt) }
+
 @_silgen_name("_AXUIElementGetWindow")
 func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
@@ -805,8 +810,7 @@ func recordUndoEntry(_ args: [String]) {
     let frames: [UndoWindowFrame] = affectedWindows.compactMap { affected in
         guard let before = affected.before, let windowID = getCGWindowID(affected.element),
               let after = currentFrame(of: affected.element) else { return nil }
-        let rounded = { (r: CGRect) in [r.origin.x, r.origin.y, r.width, r.height].map(roundedInt) }
-        guard rounded(before) != rounded(after) else { return nil }
+        guard roundedFrame(before) != roundedFrame(after) else { return nil }
         var pid: pid_t = 0
         let bundleId = AXUIElementGetPid(affected.element, &pid) == .success ? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier : nil
         return UndoWindowFrame(bundleId: bundleId, windowID: windowID, title: axString(affected.element, kAXTitleAttribute as String) ?? "",
@@ -850,6 +854,25 @@ func reportAffectedWindows(asJSON: Bool) {
     }
     warnings.forEach { fputs("Warning: \($0)\n", stderr) }
     if asJSON { printJSON(commandResultFields.merging(["windows": windows, "warnings": warnings]) { $1 }) }
+}
+
+/// Under `--verbose` without `--json`, runs before `reportAffectedWindows` and prints one line per window the command
+/// changed without a failed set call: `Moved "Notes" "Todo" (id=1341) to 100,50 800x600`. A window that was moved or
+/// resized ends with `to` and its whole frame re-read after the change, unless it ended where it started (shake).
+func printConfirmations(verb: String) {
+    let quoted = { (s: String?) in s.flatMap { $0.isEmpty ? nil : "\"\(treeEscape($0))\"" } }
+    for affected in affectedWindows where affected.failures.isEmpty {
+        var pid: pid_t = 0
+        let app = AXUIElementGetPid(affected.element, &pid) == .success
+            ? NSRunningApplication(processIdentifier: pid).flatMap { quoted($0.localizedName ?? $0.bundleIdentifier) } : nil
+        var line = [verb, app, quoted(axString(affected.element, kAXTitleAttribute as String)) ?? "window"].compactMap { $0 }.joined(separator: " ")
+        if let id = getCGWindowID(affected.element) { line += " (id=\(id))" }
+        if let after = currentFrame(of: affected.element), let before = affected.before, roundedFrame(before) != roundedFrame(after) {
+            line += " to \(roundedInt(after.origin.x)),\(roundedInt(after.origin.y)) \(roundedInt(after.width))x\(roundedInt(after.height))"
+        }
+        print(line)
+    }
+    fflush(stdout)
 }
 
 /// A changed window in the `info` schema with its owner's `bundle_id`, or nil once it no longer exists.
@@ -2178,15 +2201,15 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
 /// Enters macOS fullscreen mode for a window.
 func fullscreenCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
-    AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, true as CFTypeRef)
-    recordAffectedWindow(window.element)
+    let result = AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, true as CFTypeRef)
+    recordAffectedWindow(window.element, failure: result == .success ? nil : "could not enter fullscreen (AXError \(result.rawValue))")
 }
 
 /// Exits macOS fullscreen mode for a window.
 func unfullscreenCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
-    AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, false as CFTypeRef)
-    recordAffectedWindow(window.element)
+    let result = AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, false as CFTypeRef)
+    recordAffectedWindow(window.element, failure: result == .success ? nil : "could not exit fullscreen (AXError \(result.rawValue))")
 }
 
 /// Moves a window to a different screen, placing it at the top-left of the visible area.
@@ -2204,8 +2227,8 @@ func moveToScreenCommand(bundleId: String, selector: WindowSelector, screen: Str
 /// Minimizes a window.
 func minimizeCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
-    AXUIElementSetAttributeValue(window.element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
-    recordAffectedWindow(window.element)
+    let result = AXUIElementSetAttributeValue(window.element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
+    recordAffectedWindow(window.element, failure: result == .success ? nil : "could not minimize (AXError \(result.rawValue))")
 }
 
 /// Presses the close button of `windows` and waits for them to go. Throws `unsavedChanges` when a window answers with a
@@ -2302,9 +2325,9 @@ func restoreCommand(bundleId: String, selector: WindowSelector?) throws {
         var minimizedRef: CFTypeRef?
         AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedRef)
         if let minimized = minimizedRef as? Bool, minimized {
-            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
-            recordAffectedWindow(window)
-            restored += 1
+            let result = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
+            recordAffectedWindow(window, failure: result == .success ? nil : "could not restore (AXError \(result.rawValue))")
+            if result == .success { restored += 1 }
         }
     }
     printStatus("Restored \(restored) window(s)")
@@ -3967,12 +3990,15 @@ enum AppUsage {
 /// One command's help. `synopsis` lists positional arguments only; " [options]" is added when `flags` is non-empty.
 /// `mutates` is true when the command changes a window's position, size, state or focus; under `--json` such a
 /// command prints the windows it recorded with `recordAffectedWindow` (see `reportAffectedWindows`).
+/// `confirmationVerb` starts each of its `--verbose` lines (see `printConfirmations`). Every mutating command sets one,
+/// or leaves it nil with a comment saying why it prints no lines.
 /// `needsAccessibility` and `resolvesOwnApp` drive `runCommand`'s up-front checks; `commands --json` reports them.
 struct CommandSpec {
     let name: String
     let group: CommandGroup
     let app: AppUsage
     let mutates: Bool
+    var confirmationVerb: String? = nil
     var synopsis = ""
     let summary: String
     var arguments: [(name: String, description: String)] = []
@@ -4082,38 +4108,40 @@ let commandSpecs: [CommandSpec] = [
                         ("--timeout <seconds>", "Give up after this long, greater than 0 (default: 30)")],
                 resolvesOwnApp: true),
 
+    // No confirmationVerb: press already prints "Performed <action> on <element>", and a second line per action is noise.
     CommandSpec(name: "press", group: .elements, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Press a button or perform another accessibility action on one element of a window, found by one or more of --path, --role and --title",
                 flags: [("--path <path>", "The element at this path from 'tree', such as 0.2.1; with --role/--title, the subtree to search (default: whole window)"),
                         ("--role <role>", "Only an element with exactly this role, such as AXButton"),
                         ("--title <title>", "Only an element with this whole title, ignoring case (unlike title=, not a substring); fails and lists the paths when several match"),
                         ("--action <action>", "The action to perform, as 'tree' lists it, such as AXShowMenu (default: AXPress)")]),
-    CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position> | <window> --rect=<x,y,w,h> | <window> --grid=<cols>x<rows> --cell=<col>,<row> [--span=<cols>,<rows>]",
+    CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Snapped", synopsis: "<window> <position> | <window> --rect=<x,y,w,h> | <window> --grid=<cols>x<rows> --cell=<col>,<row> [--span=<cols>,<rows>]",
                 summary: "Snap a window to a screen region",
                 arguments: [("<position>", SnapPosition.allNames)],
                 flags: [("--rect <x,y,w,h>", "Snap to a region given as fractions of the visible frame (0 to 1, origin top left) instead of a position or --grid, e.g. --rect=0,0,0.7,1"),
                         ("--grid <cols>x<rows>", "Divide the visible frame into a grid and snap to --cell (required) instead of a position or --rect, e.g. --grid=6x4"),
                         ("--cell <col>,<row>", "With --grid, the region's top-left cell, counting from 0 at the top left, e.g. --cell=1,0"),
                         ("--span <cols>,<rows>", "With --grid, the region's size in cells (default: 1,1); it must fit inside the grid from --cell, e.g. --span=2,3")]),
-    CommandSpec(name: "move", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <x> <y> [<width> <height>]",
+    CommandSpec(name: "move", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Moved", synopsis: "<window> <x> <y> [<width> <height>]",
                 summary: "Move a window, optionally resizing it",
                 arguments: [("<x> <y>", "Top-left corner in screen points"),
                             ("<width> <height>", "New size in points")]),
-    CommandSpec(name: "resize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <width> <height>",
+    CommandSpec(name: "resize", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Resized", synopsis: "<window> <width> <height>",
                 summary: "Resize a window"),
-    CommandSpec(name: "center", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+    CommandSpec(name: "center", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Centered", synopsis: "<window>",
                 summary: "Center a window on its screen",
                 flags: [("--size N", "Resize to N x N points first"),
                         ("--size W,H", "Resize to W x H points first (also --size WxH)")]),
-    CommandSpec(name: "maximize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+    CommandSpec(name: "maximize", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Maximized", synopsis: "<window>",
                 summary: "Maximize a window to fill its screen"),
-    CommandSpec(name: "move-to-screen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <screen>",
+    CommandSpec(name: "move-to-screen", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Moved", synopsis: "<window> <screen>",
                 summary: "Move a window to another display",
                 arguments: [("<screen>", "Display index from 'screens', or primary, external, left, right, next, prev (left, right, next and prev count from the window's display)")]),
-    CommandSpec(name: "focus", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+    CommandSpec(name: "focus", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Focused", synopsis: "<window>",
                 summary: "Bring a window to the front"),
-    CommandSpec(name: "minimize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+    CommandSpec(name: "minimize", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Minimized", synopsis: "<window>",
                 summary: "Minimize a window"),
+    // No confirmationVerb: close prints its own "Closed N window(s)" line, and closed windows are not recorded.
     CommandSpec(name: "close", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> | --all",
                 summary: "Close a window, or every window of --app with --all",
                 flags: [("--all", "Close every window of --app instead of one window")]),
@@ -4121,27 +4149,27 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "quit", group: .moveSize, app: .required, mutates: false,
                 summary: "Quit --app and wait until it has exited",
                 flags: [("--force", "Force-terminate the app; unsaved changes are lost")], needsAccessibility: false),
-    CommandSpec(name: "restore", group: .moveSize, app: .optional, mutates: true, synopsis: "[<window>]",
+    CommandSpec(name: "restore", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Restored", synopsis: "[<window>]",
                 summary: "Restore minimized windows: all for --app, or just <window>"),
-    CommandSpec(name: "fullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+    CommandSpec(name: "fullscreen", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Fullscreened", synopsis: "<window>",
                 summary: "Enter macOS fullscreen"),
-    CommandSpec(name: "unfullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+    CommandSpec(name: "unfullscreen", group: .moveSize, app: .optional, mutates: true, confirmationVerb: "Unfullscreened", synopsis: "<window>",
                 summary: "Exit macOS fullscreen"),
 
-    CommandSpec(name: "tile", group: .layout, app: .required, mutates: true, synopsis: "[<window>...]",
+    CommandSpec(name: "tile", group: .layout, app: .required, mutates: true, confirmationVerb: "Tiled", synopsis: "[<window>...]",
                 summary: "Tile windows in a grid (all windows for --app when none are given)",
                 flags: [("--gap N", "Gap between windows in pixels (default: 10)"),
                         ("--cols N", "Force a number of columns, greater than 0"),
                         ("--untile", "Undo the last tile: restore the windows it moved (no --app needed)")]),
-    CommandSpec(name: "columnize", group: .layout, app: .optional, mutates: true, synopsis: "<window> <window> [<window>...]",
+    CommandSpec(name: "columnize", group: .layout, app: .optional, mutates: true, confirmationVerb: "Columnized", synopsis: "<window> <window> [<window>...]",
                 summary: "Arrange windows side by side in columns",
                 flags: [("--gap N", "Gap between columns in pixels (default: 10)")]),
-    CommandSpec(name: "stack", group: .layout, app: .required, mutates: true, synopsis: "[<window>...] [--offset N]",
+    CommandSpec(name: "stack", group: .layout, app: .required, mutates: true, confirmationVerb: "Stacked", synopsis: "[<window>...] [--offset N]",
                 summary: "Cascade the windows for --app, or just the ones named",
                 arguments: [("[<window>...]", "Window selectors to cascade (default: all windows)"),
                             ("[offset]", "Legacy form of --offset: a lone bare number with no --offset")],
                 flags: [("--offset N", "Pixels between each window (default: 30)")]),
-    CommandSpec(name: "sidebar", group: .layout, app: .optional, mutates: true, synopsis: "<window>",
+    CommandSpec(name: "sidebar", group: .layout, app: .optional, mutates: true, confirmationVerb: "Moved", synopsis: "<window>",
                 summary: "Pin a window to an edge of its screen",
                 flags: [("--side left|right|top|bottom", "Edge to pin to (default: left)"),
                         ("--full-height", "Fill the screen height"),
@@ -4151,14 +4179,14 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "save-layout", group: .layout, app: .optional, mutates: false, synopsis: "<name-or-file>",
                 summary: "Save the windows of every app, or only of --app, as a named layout or to a JSON file",
                 arguments: [("<name-or-file>", "A layout name, saved in ~/.config/window-tool/layouts/, or a file path (containing '/' or ending in .json). Replaces an existing layout of the same name.")]),
-    CommandSpec(name: "restore-layout", group: .layout, app: .none, mutates: true, synopsis: "<name-or-file>",
+    CommandSpec(name: "restore-layout", group: .layout, app: .none, mutates: true, confirmationVerb: "Restored", synopsis: "<name-or-file>",
                 summary: "Move windows back to a saved layout (the layout names the apps)",
                 arguments: [("<name-or-file>", "A layout name from 'layouts', or a file path (containing '/' or ending in .json)")],
                 flags: [("--launch", "Open the layout's apps that are not running, and wait up to 10s for their windows"),
                         ("--dry-run", "Print where each window would go and how it was matched, without moving anything")]),
     CommandSpec(name: "layouts", group: .layout, app: .none, mutates: false,
                 summary: "List the named layouts saved in ~/.config/window-tool/layouts/", needsAccessibility: false),
-    CommandSpec(name: "undo", group: .layout, app: .none, mutates: true, synopsis: "[--steps N | --list]",
+    CommandSpec(name: "undo", group: .layout, app: .none, mutates: true, confirmationVerb: "Undid", synopsis: "[--steps N | --list]",
                 summary: "Revert the last command that moved or resized windows",
                 flags: [("--steps N", "Revert the last N changes, newest first, greater than 0 (default: 1)"),
                         ("--list", "Show the undo history, newest first, without changing anything")]),
@@ -4190,7 +4218,7 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Label visible windows with their IDs (blocks until they dismiss)",
                 flags: [("--color <color>", "Label color (default: magenta)"),
                         ("--duration <seconds>", "How long to show the labels (default: 3)")], resolvesOwnApp: true),
-    CommandSpec(name: "shake", group: .overlays, app: .optional, mutates: true, synopsis: "<window> [--offset N] [--count N] [--delay <seconds>]",
+    CommandSpec(name: "shake", group: .overlays, app: .optional, mutates: true, confirmationVerb: "Shook", synopsis: "<window> [--offset N] [--count N] [--delay <seconds>]",
                 summary: "Shake a window to draw attention to it",
                 arguments: [("[offset] [count] [delay]", "Legacy forms of the options, in that order; not combined with them")],
                 flags: [("--offset N", "Shake distance in pixels (default: 12)"),
@@ -4282,6 +4310,7 @@ let globalFlags: [(name: String, description: String)] = [
     ("--json", "Output in JSON format"),
     ("--keep-going", "In a chain, run the remaining commands after one fails"),
     ("--first", "With title=, use the first match when several windows match (move, resize and maximize ignore it)"),
+    ("--verbose", "After a command that changes windows, print one line per window (ignored with --json)"),
     ("--help, -h", "Show help; after a command, show that command's help"),
     ("--version, -v", "Print version and exit"),
 ]
@@ -4293,7 +4322,7 @@ func usage() {
     }
     let width = entries.map(\.name.count).max() ?? 0
     var lines = [
-        "Usage: window-tool [--app <name-or-id>] [--exact] [--json] [--keep-going] [--first] <command> [args...]",
+        "Usage: window-tool [--app <name-or-id>] [--exact] [--json] [--keep-going] [--first] [--verbose] <command> [args...]",
         "       window-tool help <command>        Show one command's arguments and options",
     ]
     for group in CommandGroup.allCases {
@@ -4326,6 +4355,9 @@ func usage() {
       Results go to stdout and errors to stderr. With --json, a command that changes
       windows prints {"windows": [...], "warnings": [...]} instead of a status message:
       each changed window in the info schema, plus "requested" if it was moved or resized.
+      Most of those commands print nothing on success; --verbose adds one line per
+      changed window to stdout: Moved "Notes" "Todo" (id=1341) to 100,50 800x600
+      (close and press print their own line instead).
 
     Errors and exit codes:
       With --json, an error also prints {"error": {"code", "message", "details"}}
@@ -4346,7 +4378,7 @@ func usage() {
       shows them. focus, minimize, restore, fullscreen and close are not recorded.
 
     Command chaining:
-      Use + to run multiple commands in sequence, sharing --json, --first and --exact.
+      Use + to run multiple commands in sequence, sharing --json, --first, --exact and --verbose.
       Subsequent commands inherit the window selector from the previous command.
       --app may be given in any command of a chain: it applies to that command and the
       ones after it. A command that names a different app does not inherit the previous
@@ -4379,7 +4411,7 @@ func usage() {
 
 var args = Array(CommandLine.arguments.dropFirst())
 
-// Parse the global flags --json, --first, --keep-going and --exact. Each may appear once; a repeat is a usage error like a repeated command option.
+// Parse the global flags --json, --first, --keep-going, --exact and --verbose. Each may appear once; a repeat is a usage error like a repeated command option.
 // --json is read first so the error is reported as JSON when the repeat is of --json itself.
 func takeGlobalFlag(_ name: String) -> Bool {
     let given = takeFlag(name, from: &args)
@@ -4393,6 +4425,7 @@ if takeGlobalFlag("--json") { config.jsonOutput = true }
 if takeGlobalFlag("--first") { config.firstMatch = true }
 if takeGlobalFlag("--keep-going") { config.keepGoing = true }
 if takeGlobalFlag("--exact") { config.exactApp = true }
+if takeGlobalFlag("--verbose") { config.verbose = true }
 
 // Split args on "+" to support chaining multiple commands
 func splitCommands(_ args: [String]) -> [[String]] {
@@ -4817,6 +4850,7 @@ for (index, (group, app)) in commandGroups.enumerated() {
     do {
         try runCommand(group)
         recordUndoEntry(group)
+        if config.verbose && !config.jsonOutput, let verb = commandSpec(named: group[0])?.confirmationVerb { printConfirmations(verb: verb) }
         reportAffectedWindows(asJSON: config.jsonOutput && commandSpec(named: group[0])?.mutates == true && !config.printedOwnResult)
         config.printedOwnResult = false
         recordChainResult()

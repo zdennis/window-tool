@@ -30,7 +30,7 @@ With an empty history, `undo` fails with `nothing_to_undo` (exit 1). `--steps` l
 
 `tile --untile` and `sidebar --unpush` are aliases that revert the newest `tile` or `sidebar` entry, even when other changes came after it; that entry is removed and the rest of the history stays. Because they put back the frames from that entry, a window moved again since then also jumps back to where it was before the `tile` or `sidebar`.
 
-With `--json`, `undo` prints the windows it restored in the `info` schema, plus `requested` and any warnings; see [Mutating command results](../README.md#mutating-command-results). `undo --list --json` prints `{"entries": [...]}`, each entry with `step` (1 is what a plain `undo` reverts), `command`, `arguments`, `time` (ISO 8601, UTC) and `windows` (`bundle_id`, `window_id`, `title` and the saved `x`, `y`, `width`, `height`). The text form is tab-separated with a header: `STEP`, `TIME` (local), `WINDOWS` (count) and `COMMAND`.
+With `--json`, `undo` prints the windows it restored in the `info` schema, plus `requested` and any warnings; see [Mutating command results](../README.md#mutating-command-results). `undo --list --json` prints `{"entries": [...]}`, each entry with `step` (1 is what a plain `undo` reverts), `command`, `arguments`, `time` (ISO 8601, UTC) and `windows` (`bundle_id`, `window_id`, `title` and the saved `x`, `y`, `width`, `height`). The text form is tab-separated with a header: `STEP`, `TIME` (local), `WINDOWS` (count) and `COMMAND`. Without `--json`, `--verbose` adds one `Undid …` line per window after the `Undid …` summary.
 
 ## Examples
 

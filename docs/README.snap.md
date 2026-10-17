@@ -40,7 +40,7 @@ Available positions: `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, 
 - `center` -- keeps current size, centers on screen
 - `maximize` -- fills the entire visible screen area
 
-With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window.
 
 `--rect` uses the same visible area, so the result is the same on any display size: `--rect=0,0,0.7,1` is the left 70%, `--rect=0.5,0.5,0.5,0.5` the bottom-right quarter. Fractions are relative to the screen the window is on.
 

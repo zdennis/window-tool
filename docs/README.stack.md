@@ -26,7 +26,7 @@ Positions the windows in a cascade starting from the top-left of the screen, wit
 
 `--offset` is the canonical form. For compatibility, a lone bare number with no `--offset` and no other arguments is still read as the offset (`stack 50`), not as a window index. To cascade a single window by index, use `--offset` or a `title=`/`id=` selector.
 
-With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window.
 
 ## Examples
 

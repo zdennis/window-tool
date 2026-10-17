@@ -110,6 +110,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `--json` | Output in JSON format. Commands that change windows print the changed windows instead of status messages such as `Moved 2 window(s)…` (see [Mutating command results](#mutating-command-results)) |
 | `--keep-going` | In a chain, run the remaining commands after one fails; exit with the first failure's code (see [Command chaining](#command-chaining)) |
 | `--first` | With `title=`, use the first match when several windows match instead of failing; `move`, `resize` and `maximize` ignore it |
+| `--verbose` | After each command that changes windows, print one line per changed window to stdout, such as `Moved "Notes" "Todo" (id=1341) to 100,50 800x600`; ignored with `--json` (see [Mutating command results](#mutating-command-results)) |
 | `--help`, `-h` | Show help; after a command, show that command's help without running it |
 | `--version`, `-v` | Print version and exit; with `--json`, `{"version": ...}` |
 
@@ -119,7 +120,7 @@ A command's options can come before or after its arguments. An option the comman
 
 ### Command chaining
 
-Use `+` to run multiple commands in sequence, sharing `--json`, `--first` and `--exact`. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once. Once a command resolves a window, later commands in the chain target it by window ID, so they keep hitting the same window even after `focus` reorders the window list. In a chain, `move`, `resize`, `snap`, `move-to-screen` and `shake` read bare numbers that fit their own arguments as arguments, not as a window index (`+ shake 20`, `+ move 100 200 800 600`); use `id=` or `title=` to name a different window:
+Use `+` to run multiple commands in sequence, sharing `--json`, `--first`, `--exact` and `--verbose`. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once. Once a command resolves a window, later commands in the chain target it by window ID, so they keep hitting the same window even after `focus` reorders the window list. In a chain, `move`, `resize`, `snap`, `move-to-screen` and `shake` read bare numbers that fit their own arguments as arguments, not as a window index (`+ shake 20`, `+ move 100 200 800 600`); use `id=` or `title=` to name a different window:
 
 ```sh
 # Snap window 0 to center, then focus and highlight it (selector inherited)
@@ -202,6 +203,14 @@ New error codes may be added; match on the exit code for the category and on `co
 ### Mutating command results
 
 With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `close`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`, `undo`, `press`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed or the windows are gone (`close`; `restore` with no minimized windows, `restore-layout` with no matching windows). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`, with `window_id` and `bundle_id` on each window; `watch` and `list` windows carry both too. `restore-layout` also adds `restored` and `total` (saved windows moved, and in the layout); `press` also adds `element`, the element it acted on (`path`, `role`, `title`, `action`, and `confirmed`, false when the app did not answer in time). `restore-layout --dry-run` moves nothing and prints `{"plan": [...], "warnings": [...]}` instead.
+
+Without `--json`, most of these commands print nothing on success. `--verbose` prints one line per changed window to stdout after each command, following any summary line the command already prints (`Moved N window(s) matching…`, `Undid…`): the verb, the quoted app name, the quoted title (`window` when untitled) and the window ID, then for a window that was moved or resized and ended somewhere new, `to` and its whole frame re-read after the change. `shake` returns the window to where it started, so its line has no `to` part. A line means the change was applied without an error; an app can still ignore a change it accepted, so read the window again with `info` when it matters. A window whose change failed gets a warning instead of a line, and a command that fails partway prints no lines. `close` and `press` print their own line (`Closed N window(s)`, `Performed …`) and no `--verbose` lines. The lines are for people; scripts should parse `--json`, where the flag does nothing.
+
+```sh
+$ window-tool --verbose --app Notes move 0 100 50 + focus
+Moved "Notes" "Todo" (id=1341) to 100,50 800x600
+Focused "Notes" "Todo" (id=1341)
+```
 
 After a move or resize, window-tool re-reads the frame. When a set call failed, or the frame differs from the request by more than 2 points (a window with a minimum size, a fullscreen window), stderr gets `Warning: '<title>': size requested 400x300 but is 600x400`, the same message goes in `warnings`, and the exit code stays 0.
 
