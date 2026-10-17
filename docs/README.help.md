@@ -17,7 +17,7 @@ window-tool <command> --help
 
 ## Details
 
-`<command> --help` and `<command> -h` work for every command and print the same text as `help <command>`. They are checked before anything runs, so `pick --help` or `highlight --help` print help instead of starting the command, and a chain containing `--help` runs nothing. Help goes to stdout and exits 0. An unknown `<command>` prints `Unknown command 'lst'. Did you mean 'list'?` (the suggestion appears only for near misses) and a pointer to `window-tool help` to stderr, without the usage screen, and exits 1.
+`<command> --help` and `<command> -h` work for every command and print the same text as `help <command>`. They are checked before anything runs, so `pick --help` or `highlight --help` print help instead of starting the command, and a chain containing `--help` runs nothing. Help goes to stdout and exits 0. An unknown `<command>` prints `Unknown command 'lst'. Did you mean 'list'?` (the suggestion appears only for near misses) and a pointer to `window-tool help` to stderr, without the usage screen, and exits 2.
 
 Each command's usage line shows how it uses `--app`: `--app <name-or-id>` when it is required, `[--app <name-or-id>]` when it is optional (`id=` selectors find the app themselves), and nothing when the command ignores it.
 

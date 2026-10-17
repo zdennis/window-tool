@@ -116,7 +116,34 @@ window-tool --app iTerm info 0 + info 1
 window-tool focus id=2457 + highlight + dim id=2789
 ```
 
-A chain stops at the first failing command and exits 1. With `--json`, results from the commands that ran before the failure are still printed to stdout, and the error goes to stderr.
+A chain stops at the first failing command and exits with that command's error code. With `--json`, stdout holds one JSON array: the results of the commands that ran before the failure, then the error object (just the error object if the first command fails).
+
+### Errors and exit codes
+
+Errors go to stderr as `Error: <message>`. With `--json`, the error is also printed to stdout as an object with a stable `code`, the `message`, and a `details` object holding the values behind the message:
+
+```sh
+$ window-tool --json --app Finder info 99
+{
+  "error" : {
+    "code" : "window_index_out_of_range",
+    "details" : {
+      "count" : 4,
+      "index" : 99
+    },
+    "message" : "Window index 99 out of range (0..3)"
+  }
+}
+```
+
+| Exit code | Meaning | Error codes |
+|-----------|---------|-------------|
+| 0 | Success | |
+| 1 | Other failure | `operation_failed`, `nothing_to_undo`, `file_not_found` |
+| 2 | Usage error: fix the command line | `unknown_command`, `unknown_option`, `repeated_option`, `unexpected_argument`, `option_needs_value`, `option_takes_no_value`, `option_required`, `missing_arguments`, `missing_window_selector`, `invalid_value`, `unknown_choice`, `app_required`, `screen_index_out_of_range` |
+| 3 | `--app` matched no running app, or more than one | `app_not_found`, `ambiguous_app` |
+| 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
+| 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 
 ## How it works
 

@@ -10,7 +10,7 @@ window-tool --app <name-or-id> count
 
 ## Details
 
-Prints the window count as a plain integer. Requires `--app`; without it, or if the application is not running, it exits 1 with an error. With `--json`, outputs `{"count": N}`.
+Prints the window count as a plain integer. Requires `--app`; without it, or if the application is not running, it fails with an error (exit 2 without `--app`, exit 3 if the app is not running). With `--json`, outputs `{"count": N}`.
 
 ## Examples
 

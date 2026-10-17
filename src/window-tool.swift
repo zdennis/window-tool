@@ -53,8 +53,8 @@ func flushJSONBuffer() {
 }
 
 /// Exits without losing JSON results buffered by earlier commands in a chain.
-/// Commands throw WindowToolError; this is for callbacks and signal handlers that can't throw.
-/// Plain exit() is fine before any command runs.
+/// Commands throw WindowToolError; callbacks and signal handlers that can't throw report errors
+/// with exitWithError and successes with this.
 func flushJSONAndExit(_ status: Int32) -> Never {
     flushJSONBuffer()
     exit(status)
@@ -69,18 +69,23 @@ enum WindowToolError: LocalizedError {
     case noWindowMatchingTitle(String)
     case noWindowMatchingID(CGWindowID)
     case screenIndexOutOfRange(index: Int, count: Int)
+    case noWindows
+    case noPickableWindow
     case accessibilityNotEnabled
+    case screenRecordingNotEnabled
     case invalidValue(name: String, expected: String, got: String)
-    case unknownChoice(kind: String, value: String, choices: String)
+    case unknownChoice(kind: String, value: String, choices: [String])
     case optionRequired(option: String, command: String, placeholder: String)
     case nothingToUndo(command: String)
     case fileNotFound(String)
-    case appRequired
+    /// `hint` replaces the default pointer to id= for commands where a window ID does not help.
+    case appRequired(hint: String? = nil)
     case missingWindowSelector(command: String)
     case unknownOption(String, command: String)
     case repeatedOption(String, command: String)
     case unexpectedArgument(String, command: String)
-    case optionNeedsValue(String)
+    /// `command` is nil when thrown by takeOption; the top-level catch fills it in.
+    case optionNeedsValue(String, command: String?)
     case optionTakesNoValue(String, command: String)
     case missingArguments(command: String)
     case unknownCommand(String)
@@ -101,20 +106,26 @@ enum WindowToolError: LocalizedError {
             return "No window found with ID \(windowID)"
         case .screenIndexOutOfRange(let index, let count):
             return "Screen index \(index) out of range (0..\(count - 1))"
+        case .noWindows:
+            return "No windows found"
+        case .noPickableWindow:
+            return "No pickable window at click location (menu bar, Dock and status items are skipped)"
         case .accessibilityNotEnabled:
             return "Accessibility access is not enabled.\nGrant access in System Settings > Privacy & Security > Accessibility.\nAdd this terminal app or the window-tool binary."
+        case .screenRecordingNotEnabled:
+            return "Screen Recording permission is not granted.\nGrant access in System Settings > Privacy & Security > Screen Recording."
         case .invalidValue(let name, let expected, let got):
             return "\(name) must be \(expected), got '\(got)'"
         case .unknownChoice(let kind, let value, let choices):
-            return "Unknown \(kind) '\(value)'. Choose one of: \(choices)"
+            return "Unknown \(kind) '\(value)'. Choose one of: \(choices.joined(separator: ", "))"
         case .optionRequired(let option, let command, let placeholder):
             return "\(command) requires \(option) \(placeholder)"
         case .nothingToUndo(let command):
             return "Nothing to undo. Run '\(command)' first."
         case .fileNotFound(let path):
             return "File not found: \(path)"
-        case .appRequired:
-            return "--app <name> is required for this command. When selecting a window, id=<N> works without it; run 'window-tool list' to see window IDs."
+        case .appRequired(let hint):
+            return "--app <name> is required for this command. " + (hint ?? "When selecting a window, id=<N> works without it; run 'window-tool list' to see window IDs.")
         case .missingWindowSelector(let command):
             return "Missing window selector for '\(command)'. Use an index (0, 1, ...), id=<N>, or title=<pattern>.\nRun 'window-tool \(command) --help' for usage."
         case .unknownOption(let option, let command):
@@ -123,8 +134,8 @@ enum WindowToolError: LocalizedError {
             return "Option '\(option)' given more than once for '\(command)'. Run 'window-tool \(command) --help'."
         case .unexpectedArgument(let arg, let command):
             return "Unexpected argument '\(arg)' for '\(command)'. Run 'window-tool \(command) --help'."
-        case .optionNeedsValue(let option):
-            return "Option '\(option)' requires a value"
+        case .optionNeedsValue(let option, let command):
+            return "Option '\(option)' requires a value" + (command.map { ". Run 'window-tool \($0) --help'." } ?? "")
         case .optionTakesNoValue(let option, let command):
             return "Option '\(option)' takes no value for '\(command)'. Run 'window-tool \(command) --help'."
         case .missingArguments(let command):
@@ -137,6 +148,104 @@ enum WindowToolError: LocalizedError {
             return message
         }
     }
+
+    /// Stable identifier for scripts, printed as `error.code` under `--json`.
+    var code: String {
+        switch self {
+        case .appNotFound: return "app_not_found"
+        case .ambiguousApp: return "ambiguous_app"
+        case .windowIndexOutOfRange: return "window_index_out_of_range"
+        case .noWindowMatchingTitle: return "no_window_matching_title"
+        case .noWindowMatchingID: return "no_window_matching_id"
+        case .screenIndexOutOfRange: return "screen_index_out_of_range"
+        case .noWindows: return "no_windows"
+        case .noPickableWindow: return "no_pickable_window"
+        case .accessibilityNotEnabled: return "accessibility_not_enabled"
+        case .screenRecordingNotEnabled: return "screen_recording_not_enabled"
+        case .invalidValue: return "invalid_value"
+        case .unknownChoice: return "unknown_choice"
+        case .optionRequired: return "option_required"
+        case .nothingToUndo: return "nothing_to_undo"
+        case .fileNotFound: return "file_not_found"
+        case .appRequired: return "app_required"
+        case .missingWindowSelector: return "missing_window_selector"
+        case .unknownOption: return "unknown_option"
+        case .repeatedOption: return "repeated_option"
+        case .unexpectedArgument: return "unexpected_argument"
+        case .optionNeedsValue: return "option_needs_value"
+        case .optionTakesNoValue: return "option_takes_no_value"
+        case .missingArguments: return "missing_arguments"
+        case .unknownCommand: return "unknown_command"
+        case .operationFailed: return "operation_failed"
+        }
+    }
+
+    /// The values behind the message, printed as `error.details` under `--json`.
+    var details: [String: Any] {
+        switch self {
+        case .appNotFound(let app):
+            return ["app": app]
+        case .ambiguousApp(let query, let matches):
+            return ["query": query, "matches": matches.map { ["name": $0.name, "bundle_id": $0.bundleId] }]
+        case .windowIndexOutOfRange(let index, let count), .screenIndexOutOfRange(let index, let count):
+            return ["index": index, "count": count]
+        case .noWindowMatchingTitle(let pattern):
+            return ["title": pattern]
+        case .noWindowMatchingID(let windowID):
+            return ["window_id": Int(windowID)]
+        case .invalidValue(let name, let expected, let got):
+            return ["name": name, "expected": expected, "got": got]
+        case .unknownChoice(let kind, let value, let choices):
+            return ["kind": kind, "value": value, "choices": choices]
+        case .optionRequired(let option, let command, _):
+            return ["option": option, "command": command]
+        case .nothingToUndo(let command), .missingWindowSelector(let command), .missingArguments(let command):
+            return ["command": command]
+        case .fileNotFound(let path):
+            return ["path": path]
+        case .unknownOption(let option, let command), .repeatedOption(let option, let command), .optionTakesNoValue(let option, let command):
+            return ["option": option, "command": command]
+        case .unexpectedArgument(let argument, let command):
+            return ["argument": argument, "command": command]
+        case .optionNeedsValue(let option, let command):
+            return ["option": option, "command": command ?? NSNull()]
+        case .unknownCommand(let command):
+            return ["command": command, "suggestion": closestCommandName(to: command) ?? NSNull()]
+        case .noWindows, .noPickableWindow, .accessibilityNotEnabled, .screenRecordingNotEnabled, .appRequired, .operationFailed:
+            return [:]
+        }
+    }
+
+    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 1 anything else.
+    var exitCode: Int32 {
+        switch self {
+        case .invalidValue, .unknownChoice, .optionRequired, .appRequired, .missingWindowSelector, .unknownOption,
+             .repeatedOption, .unexpectedArgument, .optionNeedsValue, .optionTakesNoValue, .missingArguments, .unknownCommand,
+             .screenIndexOutOfRange:
+            return 2
+        case .appNotFound, .ambiguousApp:
+            return 3
+        case .windowIndexOutOfRange, .noWindowMatchingTitle, .noWindowMatchingID, .noWindows, .noPickableWindow:
+            return 4
+        case .accessibilityNotEnabled, .screenRecordingNotEnabled:
+            return 5
+        case .nothingToUndo, .fileNotFound, .operationFailed:
+            return 1
+        }
+    }
+}
+
+/// Reports an error and exits with its code. The message goes to stderr; under `--json` the
+/// `{"error": {"code", "message", "details"}}` object also goes to stdout, after any results
+/// buffered by earlier commands in a chain. Errors from system frameworks report as `operation_failed`.
+func exitWithError(_ error: Error, prefix: String = "Error") -> Never {
+    let toolError = error as? WindowToolError ?? .operationFailed(error.localizedDescription)
+    let message = toolError.localizedDescription
+    fputs("\(prefix): \(message)\n", stderr)
+    if config.jsonOutput {
+        printJSON(["error": ["code": toolError.code, "message": message, "details": toolError.details]])
+    }
+    flushJSONAndExit(toolError.exitCode)
 }
 
 // MARK: - Argument Parsing Helpers
@@ -178,7 +287,7 @@ func takeOption(_ name: String, from args: inout [String]) throws -> String? {
         return String(args.remove(at: idx).dropFirst(name.count + 1))
     }
     guard idx + 1 < args.count else {
-        throw WindowToolError.optionNeedsValue(name)
+        throw WindowToolError.optionNeedsValue(name, command: nil)
     }
     let value = args[idx + 1]
     args.removeSubrange(idx...idx + 1)
@@ -239,7 +348,7 @@ func parseColor(_ name: String) throws -> NSColor {
         let colors: [NSColor] = [.red, .green, .blue, .yellow, .orange, .purple, .white, .cyan, .magenta]
         return colors[Int.random(in: 0..<colors.count)]
     default:
-        throw WindowToolError.unknownChoice(kind: "color", value: name, choices: validColors.joined(separator: ", "))
+        throw WindowToolError.unknownChoice(kind: "color", value: name, choices: validColors)
     }
 }
 
@@ -479,7 +588,7 @@ func parseNamedSelector(_ arg: String) throws -> WindowSelector? {
     if arg.hasPrefix("title=") {
         let pattern = String(arg.dropFirst(6))
         guard !pattern.isEmpty else {
-            throw WindowToolError.operationFailed("title= needs a pattern, e.g. title=Inbox")
+            throw WindowToolError.invalidValue(name: "title=", expected: "a non-empty pattern (e.g. title=Inbox)", got: "")
         }
         return .byTitle(pattern)
     }
@@ -518,7 +627,7 @@ func resolveSelectorAndArgs(_ args: [String], command: String, argCounts: [Int] 
 
 func requireApp(_ bundleId: String) throws -> AXUIElement {
     guard !bundleId.isEmpty else {
-        throw WindowToolError.appRequired
+        throw WindowToolError.appRequired()
     }
     guard let app = getAppElement(bundleId: bundleId) else {
         throw WindowToolError.appNotFound(bundleId)
@@ -781,7 +890,7 @@ func shellInitCommand(shell: String) throws {
         print("  set -gx WINDOWID (\(binary) active-window --id 2>/dev/null)")
         print("end")
     default:
-        throw WindowToolError.unknownChoice(kind: "shell", value: shell, choices: "zsh, bash, fish")
+        throw WindowToolError.unknownChoice(kind: "shell", value: shell, choices: ["zsh", "bash", "fish"])
     }
 }
 
@@ -1326,7 +1435,7 @@ func unborderCommand(bundleId: String, selector: WindowSelector? = nil) throws {
 
     // Borders are filed under the owning app (see borderOwnerDir), so --app must name the owner here.
     guard !bundleId.isEmpty else {
-        throw WindowToolError.operationFailed("--app is required for this command (or use 'unborder-all' to remove every border)")
+        throw WindowToolError.appRequired(hint: "Use 'unborder <window>' with id=<N>, or 'unborder-all' to remove every border.")
     }
     let appDir = "\(borderPidDir)/\(bundleId)"
     guard let files = try? FileManager.default.contentsOfDirectory(atPath: appDir) else {
@@ -1484,7 +1593,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
         sidebarX = bounds.x
         sidebarY = bounds.y + bounds.height - h
     default:
-        throw WindowToolError.unknownChoice(kind: "side", value: side, choices: "left, right, top, bottom")
+        throw WindowToolError.unknownChoice(kind: "side", value: side, choices: ["left", "right", "top", "bottom"])
     }
     moveWindow(window.element, x: sidebarX, y: sidebarY)
     if fullHeight || fullWidth {
@@ -1916,8 +2025,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
             let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: nil)
 
             guard assetWriter.startWriting() else {
-                fputs("Error: Failed to start writing: \(assetWriter.error?.localizedDescription ?? "unknown")\n", stderr)
-                flushJSONAndExit(1)
+                exitWithError(WindowToolError.operationFailed("Failed to start writing: \(assetWriter.error?.localizedDescription ?? "unknown")"))
             }
 
             let delegate = RecordingDelegate(assetWriter: assetWriter, videoInput: videoInput, adaptor: adaptor, fps: fps)
@@ -1947,8 +2055,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
                             ? "no frames were captured (is the window minimized or off-screen? restore it and retry)"
                             : (assetWriter.error?.localizedDescription ?? "unknown error")
                         try? FileManager.default.removeItem(at: outputURL)
-                        fputs("Error: Recording failed: \(reason)\n", stderr)
-                        flushJSONAndExit(1)
+                        exitWithError(WindowToolError.operationFailed("Recording failed: \(reason)"))
                     }
                     fputs("Recording saved to \(outputURL.path)\n", stderr)
                     if config.jsonOutput {
@@ -1980,8 +2087,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
             }
 
         } catch let error as NSError where error.domain == "com.apple.ScreenCaptureKit.ErrorDomain" {
-            fputs("Error: Screen Recording permission is not granted.\nGrant access in System Settings > Privacy & Security > Screen Recording.\n", stderr)
-            flushJSONAndExit(1)
+            exitWithError(WindowToolError.screenRecordingNotEnabled)
         } catch {
             setupError = error
             semaphore.signal()
@@ -1991,8 +2097,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
     DispatchQueue.global().async {
         semaphore.wait()
         if let error = setupError {
-            fputs("Error: \(error.localizedDescription)\n", stderr)
-            flushJSONAndExit(1)
+            exitWithError(error)
         }
     }
 }
@@ -2198,8 +2303,7 @@ func pickCommand() {
         let cgPoint = CGPoint(x: screenPoint.x, y: mainScreenHeight - screenPoint.y)
 
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] else {
-            fputs("Error: Could not get window list\n", stderr)
-            flushJSONAndExit(1)
+            exitWithError(WindowToolError.operationFailed("Could not get window list"))
         }
 
         // Walk front-to-back, find first window containing the click
@@ -2222,8 +2326,7 @@ func pickCommand() {
             }
         }
 
-        fputs("No pickable window at click location (menu bar, Dock and status items are skipped)\n", stderr)
-        flushJSONAndExit(1)
+        exitWithError(WindowToolError.noPickableWindow)
     }
 
     app.run()
@@ -2413,7 +2516,7 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
     }
 
     guard !windows.isEmpty else {
-        throw WindowToolError.operationFailed("No windows found")
+        throw WindowToolError.noWindows
     }
 
     let bounds = screenBoundsForWindow(windows[0])
@@ -2770,6 +2873,12 @@ func usage() {
       Results go to stdout and errors to stderr. With --json, status messages
       also go to stderr so stdout holds only JSON.
 
+    Errors and exit codes:
+      With --json, an error also prints {"error": {"code", "message", "details"}}
+      to stdout. Exit codes: 0 success, 1 other failure, 2 usage error,
+      3 app not found or ambiguous, 4 window not found, 5 permission not granted
+      (Accessibility, or Screen Recording for record).
+
     Command chaining:
       Use + to run multiple commands in sequence, sharing --app and --json flags.
       Subsequent commands inherit the window selector from the previous command.
@@ -2801,15 +2910,16 @@ if let jsonIdx = args.firstIndex(of: "--json") {
 }
 
 // Parse --app flag
+// A missing value (takeOption throws) and an empty one get the same error.
+let missingApp = WindowToolError.invalidValue(name: "--app", expected: "an app name or bundle ID (e.g. --app Finder)", got: "")
 do {
     if let app = try takeOption("--app", from: &args) {
-        guard !app.isEmpty else { throw WindowToolError.appRequired }
+        guard !app.isEmpty else { throw missingApp }
         config.bundleId = app
         config.appExplicit = true
     }
 } catch {
-    fputs("Error: --app requires an app name or bundle identifier\n", stderr)
-    exit(1)
+    exitWithError(missingApp)
 }
 
 guard !args.isEmpty else {
@@ -2922,7 +3032,7 @@ func runCommand(_ args: [String]) throws {
             throw WindowToolError.missingArguments(command: "snap")
         }
         guard let position = SnapPosition(rawValue: posStr) else {
-            throw WindowToolError.unknownChoice(kind: "position", value: posStr, choices: SnapPosition.allNames)
+            throw WindowToolError.unknownChoice(kind: "position", value: posStr, choices: SnapPosition.allCases.map(\.rawValue))
         }
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
@@ -3078,12 +3188,11 @@ do {
         do {
             try runCommand(group)
         } catch {
-            if commandGroups.count > 1 {
-                fputs("Error in command \(index + 1) (\(group[0])): \(error.localizedDescription)\n", stderr)
-            } else {
-                fputs("Error: \(error.localizedDescription)\n", stderr)
+            var error = error
+            if case WindowToolError.optionNeedsValue(let option, nil) = error {
+                error = WindowToolError.optionNeedsValue(option, command: group[0])
             }
-            flushJSONAndExit(1)
+            exitWithError(error, prefix: commandGroups.count > 1 ? "Error in command \(index + 1) (\(group[0]))" : "Error")
         }
     }
     flushJSONBuffer()
