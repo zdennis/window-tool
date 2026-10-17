@@ -47,7 +47,7 @@ If pushing a window would move it partially off-screen, its width or height is r
 
 Every `sidebar` saves the previous frames of the windows it moved, the sidebar window and pushed windows from any app, in the undo history. `--unpush` reverts the newest `sidebar` entry, even when other changes came after it, and puts the sidebar window back too; `undo` reverts the newest change of any kind. See [undo](README.undo.md). With no `sidebar` in the history, `--unpush` fails with `Nothing to undo. Run 'sidebar' first.` (exit 1).
 
-With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window.
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window, starting `Moved`, or `Undid` for `--unpush`.
 
 ## Examples
 

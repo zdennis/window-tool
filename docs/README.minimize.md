@@ -12,11 +12,11 @@ window-tool [--app <name-or-id>] minimize <window>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`. |
 
 ## Details
 
-Minimizes the window to the dock. Use `restore` to unminimize all minimized windows.
+Minimizes the window to the dock. Use `restore` to unminimize all minimized windows. A window that cannot be minimized (its AXMinimized attribute is not settable and it has no enabled minimize button) is left alone with a warning on stderr and in `warnings` under `--json`. The exit status is still 0, so a script should check `warnings` (or `minimized` in the `--json` window) rather than the exit code.
 
 With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results). Without `--json`, `--verbose` prints one line per changed window.
 

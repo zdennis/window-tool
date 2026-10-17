@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] pip <window> [--scale <factor>] [--position <co
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`. |
 
 ## Options
 
@@ -21,7 +21,7 @@ window-tool [--app <name-or-id>] pip <window> [--scale <factor>] [--position <co
 | `--scale <factor>` | Thumbnail size relative to the window, greater than 0 and at most 1 (default: 0.3) |
 | `--position <corner>` | `top-left`, `top-right`, `bottom-left` or `bottom-right`, the same corner names as `snap` (default: `bottom-right`) |
 | `--fps N` | Most frames per second to show, 1 to 120 (default: 10) |
-| `--duration <seconds>` | Close the thumbnail after this many seconds (default: stay open until Ctrl-C) |
+| `--duration <seconds>` | Close the thumbnail after this many seconds, greater than 0 (default: stay open until Ctrl-C) |
 
 ## Details
 

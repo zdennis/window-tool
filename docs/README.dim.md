@@ -12,14 +12,14 @@ window-tool [--app <name-or-id>] dim <window> [--opacity <value>] [--duration <s
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`. |
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
 | `--opacity <value>` | Dim overlay opacity, 0.0-1.0 (default: 0.5) |
-| `--duration <seconds>` | Auto-dismiss after this many seconds; 0 means stay until `undim` (default: 0) |
+| `--duration <seconds>` | Auto-dismiss after this many seconds, up to 86400; 0 means stay until `undim` (default: 0) |
 
 ## Details
 

@@ -392,6 +392,9 @@ func exitWithError(_ error: Error, prefix: String = "Error") -> Never {
 
 // MARK: - Argument Parsing Helpers
 
+// `label` becomes the error message subject and `details.name` of `invalid_value`. A value from an option uses the
+// option as spelled (`--opacity`, `--size`); a positional argument uses a bare word (`index`, `x`, `width`), and so do
+// the legacy positional forms of shake and watch.
 func parseInt(_ s: String, label: String) throws -> Int {
     guard let v = Int(s) else {
         throw WindowToolError.invalidValue(name: label, expected: "a whole number", got: s)
@@ -431,9 +434,32 @@ func parsePositiveDouble(_ s: String, label: String) throws -> Double {
     return v
 }
 
+/// An overlay's `--duration` (highlight, dim, identify): 0 to 86400 seconds (one day). The capture commands
+/// (record, pip) take any positive `--duration` through `parsePositiveDouble` instead.
+func parseOverlayDuration(_ s: String) throws -> Double {
+    guard let v = Double(s), v >= 0, v <= 86400 else {
+        throw WindowToolError.invalidValue(name: "--duration", expected: "a number of seconds from 0 to 86400", got: s)
+    }
+    return v
+}
+
+/// A capture `--fps`: 1 to 120, capped so CMTimeScale (an Int32) cannot overflow.
+func parseFps(_ s: String) throws -> Int {
+    guard let v = Int(s), (1...120).contains(v) else {
+        throw WindowToolError.invalidValue(name: "--fps", expected: "a whole number from 1 to 120", got: s)
+    }
+    return v
+}
+
 /// A duration for messages: whole seconds without a decimal point (`10s`), otherwise as given (`0.5s`).
 func formatSeconds(_ seconds: Double) -> String {
     seconds == seconds.rounded() ? "\(Int(seconds))s" : "\(seconds)s"
+}
+
+/// `s` as one shell word, for commands suggested in messages: unchanged when it is only letters, digits and `-_./`,
+/// otherwise single-quoted with each `'` written as `'\''`, so no character (`$`, `!`, a space) is expanded.
+func shellQuoted(_ s: String) -> String {
+    s.allSatisfy { $0.isLetter || $0.isNumber || "-_./".contains($0) } ? s : "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
 /// Removes the first `--name value` or `--name=value` from `args` and returns the value, or nil when absent.
@@ -512,19 +538,19 @@ func parseColor(_ name: String) throws -> NSColor {
 
 func parseFlashFlags(_ args: inout [String]) throws -> (color: NSColor, count: Int) {
     let color = try takeOption("--color", from: &args).map(parseColor) ?? .green
-    let count = try takeOption("--count", from: &args).map { try parsePositiveInt($0, label: "count") } ?? 1
+    let count = try takeOption("--count", from: &args).map { try parsePositiveInt($0, label: "--count") } ?? 1
     return (color, count)
 }
 
 func parseHighlightFlags(_ args: inout [String]) throws -> (color: NSColor, duration: Double) {
     let color = try takeOption("--color", from: &args).map(parseColor) ?? .red
-    let duration = try takeOption("--duration", from: &args).map { try parseDouble($0, label: "duration") } ?? 3.0
+    let duration = try takeOption("--duration", from: &args).map(parseOverlayDuration) ?? 3.0
     return (color, duration)
 }
 
 func parseBorderFlags(_ args: inout [String]) throws -> (color: NSColor, width: CGFloat) {
     let color = try takeOption("--color", from: &args).map(parseColor) ?? .blue
-    let width = try takeOption("--width", from: &args).map { CGFloat(try parseDouble($0, label: "width")) } ?? 3
+    let width = try takeOption("--width", from: &args).map { CGFloat(try parseDouble($0, label: "--width")) } ?? 3
     return (color, width)
 }
 
@@ -533,11 +559,11 @@ func parseSizeFlag(_ args: inout [String]) throws -> (CGFloat, CGFloat)? {
     if let sep = value.firstIndex(of: ",") ?? value.firstIndex(of: "x") {
         let wStr = String(value[value.startIndex..<sep])
         let hStr = String(value[value.index(after: sep)...])
-        let w = CGFloat(try parseDouble(wStr, label: "width"))
-        let h = CGFloat(try parseDouble(hStr, label: "height"))
+        let w = CGFloat(try parseDouble(wStr, label: "--size"))
+        let h = CGFloat(try parseDouble(hStr, label: "--size"))
         return (w, h)
     }
-    let n = CGFloat(try parseDouble(value, label: "size"))
+    let n = CGFloat(try parseDouble(value, label: "--size"))
     return (n, n)
 }
 
@@ -550,8 +576,8 @@ func parseSidebarFlags(_ args: inout [String]) throws -> (side: String, fullHeig
 }
 
 func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, untile: Bool) {
-    let gap = try takeOption("--gap", from: &args).map { try parseInt($0, label: "gap") } ?? 10
-    let cols = try takeOption("--cols", from: &args).map { try parsePositiveInt($0, label: "cols") }
+    let gap = try takeOption("--gap", from: &args).map { try parseInt($0, label: "--gap") } ?? 10
+    let cols = try takeOption("--cols", from: &args).map { try parsePositiveInt($0, label: "--cols") }
     let untile = takeFlag("--untile", from: &args)
     return (gap, cols, untile)
 }
@@ -587,13 +613,13 @@ struct UndoEntry: Codable {
     let windows: [UndoWindowFrame]
 }
 
-/// The undo history, oldest first; empty when there is none, or (with a warning) when the file cannot be decoded.
+/// The undo history, oldest first; empty when there is none, or (with a command warning) when the file cannot be decoded.
 func loadUndoHistory() -> [UndoEntry] {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: undoHistoryFile)) else { return [] }
     guard let history = try? decoder.decode([UndoEntry].self, from: data) else {
-        fputs("Warning: could not read the undo history at \(undoHistoryFile); treating it as empty, and the next change replaces it\n", stderr)
+        commandWarnings.append("could not read the undo history at \(undoHistoryFile); treating it as empty, and the next change replaces it")
         return []
     }
     return history
@@ -777,9 +803,10 @@ func recordAffectedWindow(_ window: AXUIElement, position: CGPoint? = nil, size:
     if let failure { affectedWindows[index].failures.append(failure) }
 }
 
-/// The window's frame before the running command first changes it, or nil once it has been recorded.
+/// The window's frame before the running command first moves or resizes it, or nil once that frame has been recorded.
+/// A window recorded without one (focused or minimized earlier in the command) still gets it on its first move.
 func frameBeforeFirstChange(_ window: AXUIElement) -> CGRect? {
-    affectedWindows.contains { CFEqual($0.element, window) } ? nil : currentFrame(of: window)
+    affectedWindows.first { CFEqual($0.element, window) }?.before != nil ? nil : currentFrame(of: window)
 }
 
 /// Moves a window to the specified screen coordinates.
@@ -1033,10 +1060,7 @@ func findWindowByID(_ windowID: CGWindowID) -> WindowInfo? {
 /// Searches child elements (sheets, dialogs) of the given windows for a matching CGWindowID.
 func findChildWindow(windowID: CGWindowID, in windows: [WindowInfo]) -> WindowInfo? {
     for (parentIndex, parent) in windows.enumerated() {
-        var childrenRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(parent.element, kAXChildrenAttribute as CFString, &childrenRef)
-        guard let children = childrenRef as? [AXUIElement] else { continue }
-        for child in children {
+        for child in axChildren(parent.element) {
             var roleRef: CFTypeRef?
             AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleRef)
             let role = roleRef as? String ?? ""
@@ -1108,7 +1132,8 @@ let screenNames = ["primary", "external", "left", "right", "next", "prev"]
 /// `frames` are the displays in global top-left coordinates, indexed as in `screens`; `current` is the display
 /// that `left`, `right`, `next` and `prev` are relative to. `next` and `prev` wrap around in index order.
 /// `primary` is index 0 and `external` index 1: `screens` lists the primary display first.
-func resolveScreenIndex(_ value: String, frames: [CGRect], current: Int) throws -> Int {
+/// `label` names the value in errors: `--screen` for list's option, the bare `screen` for move-to-screen's positional.
+func resolveScreenIndex(_ value: String, frames: [CGRect], current: Int, label: String = "screen") throws -> Int {
     if let index = Int(value) {
         guard frames.indices.contains(index) else {
             throw WindowToolError.screenIndexOutOfRange(index: index, count: frames.count)
@@ -1118,7 +1143,7 @@ func resolveScreenIndex(_ value: String, frames: [CGRect], current: Int) throws 
     func nearest(_ direction: CGFloat) throws -> Int {
         let candidates = frames.indices.filter { (frames[$0].midX - frames[current].midX) * direction > 0 }
         guard let best = candidates.min(by: { abs(frames[$0].midX - frames[current].midX) < abs(frames[$1].midX - frames[current].midX) }) else {
-            throw WindowToolError.invalidValue(name: "screen", expected: "an existing display (none is \(direction < 0 ? "left" : "right") of display \(current))", got: value)
+            throw WindowToolError.invalidValue(name: label, expected: "an existing display (none is \(direction < 0 ? "left" : "right") of display \(current))", got: value)
         }
         return best
     }
@@ -1126,7 +1151,7 @@ func resolveScreenIndex(_ value: String, frames: [CGRect], current: Int) throws 
     case "primary": return 0
     case "external":
         guard frames.count > 1 else {
-            throw WindowToolError.invalidValue(name: "screen", expected: "an existing display (only the primary display is connected)", got: value)
+            throw WindowToolError.invalidValue(name: label, expected: "an existing display (only the primary display is connected)", got: value)
         }
         return 1
     case "left": return try nearest(-1)
@@ -1374,7 +1399,7 @@ func listCommand(bundleId: String?, titleGlob: String? = nil, screen: String? = 
         // Relative names (left, right, next, prev) are relative to the display holding the mouse, as in active-screen.
         let mouse = NSEvent.mouseLocation
         let current = NSScreen.screens.firstIndex { $0.frame.contains(mouse) } ?? 0
-        let wanted = try resolveScreenIndex(screen, frames: screenFrames, current: current)
+        let wanted = try resolveScreenIndex(screen, frames: screenFrames, current: current, label: "--screen")
         entries = entries.filter { screenIndex(of: $0.window) == wanted }
     }
     if excludeMinimized || visibleOnly {
@@ -1633,8 +1658,8 @@ func removePIDFileIfOwned(_ path: String) {
 let dimPIDFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-dim.pid")
 
 func parseDimFlags(_ args: inout [String]) throws -> (opacity: Double, duration: Double) {
-    let opacity = try takeOption("--opacity", from: &args).map { try parseDouble($0, label: "opacity") } ?? 0.5
-    let duration = try takeOption("--duration", from: &args).map { try parseDouble($0, label: "duration") } ?? 0
+    let opacity = try takeOption("--opacity", from: &args).map { try parseDouble($0, label: "--opacity") } ?? 0.5
+    let duration = try takeOption("--duration", from: &args).map(parseOverlayDuration) ?? 0
     return (opacity, duration)
 }
 
@@ -1661,7 +1686,7 @@ func killExistingDim() {
 
 func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, duration: Double) throws {
     guard opacity >= 0.0 && opacity <= 1.0 else {
-        throw WindowToolError.invalidValue(name: "opacity", expected: "between 0.0 and 1.0", got: "\(opacity)")
+        throw WindowToolError.invalidValue(name: "--opacity", expected: "between 0.0 and 1.0", got: "\(opacity)")
     }
 
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
@@ -1962,12 +1987,17 @@ func parseRectFlag(_ args: inout [String]) throws -> SnapFractions? {
     guard let value = try takeOption("--rect", from: &args) else { return nil }
     let parts = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
     guard parts.count == 4 else {
-        throw WindowToolError.invalidValue(name: "rect", expected: "four comma-separated fractions: x,y,width,height", got: value)
+        throw WindowToolError.invalidValue(name: "--rect", expected: "four comma-separated fractions: x,y,width,height", got: value)
     }
-    let v = try zip(["x", "y", "width", "height"], parts).map { try parseDouble($1, label: "rect \($0)") }
+    let v = try zip(["x", "y", "width", "height"], parts).map { component, part in
+        guard let n = Double(part), n.isFinite else {
+            throw WindowToolError.invalidValue(name: "--rect", expected: "four comma-separated fractions: x,y,width,height, with \(component) a number", got: value)
+        }
+        return n
+    }
     let eps = 1e-9
     guard v[0] >= 0, v[1] >= 0, v[2] > 0, v[3] > 0, v[0] + v[2] <= 1 + eps, v[1] + v[3] <= 1 + eps else {
-        throw WindowToolError.invalidValue(name: "rect", expected: "fractions of the visible frame with x,y >= 0, width,height > 0, x+width <= 1 and y+height <= 1", got: value)
+        throw WindowToolError.invalidValue(name: "--rect", expected: "fractions of the visible frame with x,y >= 0, width,height > 0, x+width <= 1 and y+height <= 1", got: value)
     }
     return SnapFractions(x: v[0], y: v[1], width: v[2], height: v[3])
 }
@@ -2224,9 +2254,17 @@ func moveToScreenCommand(bundleId: String, selector: WindowSelector, screen: Str
     moveWindow(window.element, x: visible.origin.x, y: visible.origin.y)
 }
 
-/// Minimizes a window.
+/// Minimizes a window. Setting AXMinimized reports success even on a window that cannot be minimized, so a window gets
+/// a warning instead unless AXMinimized is settable or its minimize button is enabled (an already minimized one is left as it is).
 func minimizeCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    var settable: DarwinBoolean = false
+    AXUIElementIsAttributeSettable(window.element, kAXMinimizedAttribute as CFString, &settable)
+    let buttonEnabled = axElement(window.element, kAXMinimizeButtonAttribute as String).map { axBool($0, kAXEnabledAttribute as String) } ?? false
+    guard axBool(window.element, kAXMinimizedAttribute as String) || settable.boolValue || buttonEnabled else {
+        recordAffectedWindow(window.element, failure: "cannot be minimized (its minimized state is not settable and it has no enabled minimize button)")
+        return
+    }
     let result = AXUIElementSetAttributeValue(window.element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
     recordAffectedWindow(window.element, failure: result == .success ? nil : "could not minimize (AXError \(result.rawValue))")
 }
@@ -2253,10 +2291,7 @@ func closeWindows(_ windows: [WindowInfo]) throws {
         return !getWindows(appElement: AXUIElementCreateApplication(pid)).contains { CFEqual($0.element, window.element) }
     }
     func hasSheet(_ window: WindowInfo) -> Bool {
-        var childrenRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(window.element, kAXChildrenAttribute as CFString, &childrenRef)
-        let children = childrenRef as? [AXUIElement] ?? []
-        return children.contains { axString($0, kAXRoleAttribute as String) == kAXSheetRole as String }
+        axChildren(window.element).contains { axString($0, kAXRoleAttribute as String) == kAXSheetRole as String }
     }
     // A window with unsaved changes stays open behind a sheet, so stop waiting for it as soon as the sheet shows.
     let deadline = Date().addingTimeInterval(2)
@@ -2879,8 +2914,8 @@ func parseRecordFlags(_ args: inout [String]) throws -> (output: String, fps: In
     guard let output = try takeOption("--output", from: &args) else {
         throw WindowToolError.optionRequired(option: "--output", command: "record", placeholder: "<path>")
     }
-    let fps = try takeOption("--fps", from: &args).map { try parsePositiveInt($0, label: "fps") } ?? 30
-    let duration = try takeOption("--duration", from: &args).map { try parseDouble($0, label: "duration") }
+    let fps = try takeOption("--fps", from: &args).map(parseFps) ?? 30
+    let duration = try takeOption("--duration", from: &args).map { try parsePositiveDouble($0, label: "--duration") }
     let countdown = !takeFlag("--no-countdown", from: &args)
     let border = !takeFlag("--no-border", from: &args)
     return (output, fps, duration, countdown, border)
@@ -3192,13 +3227,7 @@ func parsePipFlags(_ args: inout [String]) throws -> (scale: Double, corner: Pip
         }
         return corner
     } ?? .bottomRight
-    // Capped so CMTimeScale (an Int32) cannot overflow.
-    let fps = try takeOption("--fps", from: &args).map { value in
-        guard let fps = Int(value), (1...120).contains(fps) else {
-            throw WindowToolError.invalidValue(name: "--fps", expected: "a whole number from 1 to 120", got: value)
-        }
-        return fps
-    } ?? 10
+    let fps = try takeOption("--fps", from: &args).map(parseFps) ?? 10
     let duration = try takeOption("--duration", from: &args).map { try parsePositiveDouble($0, label: "--duration") }
     return (scale, corner, fps, duration)
 }
@@ -3823,7 +3852,7 @@ func restoreLayoutCommand(target: String, launch: Bool, dryRun: Bool) throws {
     }
     let restored = plan.filter(\.willMove).count
     if restored == 0 && !plan.isEmpty {
-        commandWarnings.append("no saved window was restored; run 'window-tool restore-layout \(target) --dry-run' to see how each one matched")
+        commandWarnings.append("no saved window was restored; run window-tool restore-layout \(shellQuoted(target)) --dry-run to see how each one matched")
     }
     commandResultFields = ["restored": restored, "total": plan.count]
     printStatus("Restored \(restored)/\(plan.count) window(s) for \(appOrder.count == 1 ? appOrder[0] : "\(appOrder.count) apps")")
@@ -4170,6 +4199,8 @@ struct CommandSpec {
     var confirmationVerb: String? = nil
     var synopsis = ""
     let summary: String
+    /// A shorter summary for the top-level help's command list, when `summary` is too long for one line there.
+    var brief: String? = nil
     var arguments: [(name: String, description: String)] = []
     var flags: [(name: String, description: String)] = []
     var needsAccessibility = true
@@ -4219,10 +4250,19 @@ struct CommandSpec {
     }
 }
 
-/// Formats name/description pairs as an indented two-column list.
+/// The widest command synopsis the top-level help keeps on one line with its summary. It fits every synopsis except
+/// snap's and watch's, which wrap, so the summary column does not move to the right of their long synopses.
+let helpNameColumnLimit = 42
+
+/// Formats name/description pairs as an indented two-column list. A name longer than `width` gets its description on
+/// the next line, in the description column.
 func helpRows(_ rows: [(name: String, description: String)], width: Int? = nil) -> [String] {
     let width = width ?? rows.map(\.name.count).max() ?? 0
-    return rows.map { "  " + $0.name.padding(toLength: width + 2, withPad: " ", startingAt: 0) + $0.description }
+    return rows.map { row in
+        row.name.count > width
+            ? "  \(row.name)\n" + String(repeating: " ", count: width + 4) + row.description
+            : "  " + row.name.padding(toLength: width + 2, withPad: " ", startingAt: 0) + row.description
+    }
 }
 
 /// Every command, in the order the top-level help lists them within each group.
@@ -4242,11 +4282,11 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "info", group: .query, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Show detailed info for a window"),
     CommandSpec(name: "tree", group: .query, app: .optional, mutates: false, synopsis: "<window>",
-                summary: "Print a window's accessibility element tree: role, title, value, frame and actions",
+                summary: "Print a window's accessibility element tree: role, title, value, frame and actions", brief: "Print a window's accessibility element tree",
                 flags: [("--depth N", "Levels below the window to show, 0 to 100 (default: 10); web content can print thousands of lines, so lower it there"),
                         ("--max-value N", "Cut string values to N characters, 0 for no limit (default: 200); --json marks a cut value with value_truncated")]),
     CommandSpec(name: "text", group: .query, app: .optional, mutates: false, synopsis: "<window>",
-                summary: "Print the text inside a window: label and text field values, one per line, escaped (--raw for readable text, --json for exact strings)",
+                summary: "Print the text inside a window: label and text field values, one per line, escaped (--raw for readable text, --json for exact strings)", brief: "Print the text inside a window, one value per line",
                 flags: [("--path <path>", "Read only the element at this path from 'tree' and its descendants, such as 0.2.1 (\"\" is the whole window, the default)"),
                         ("--focused", "Print only the value of the element with keyboard focus; --json prints just that element's object (exit 4 when nothing in the window has keyboard focus)"),
                         ("--raw", "Print line breaks and tabs inside values as they are (other control characters stay escaped)"),
@@ -4257,7 +4297,7 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Print info about the frontmost app's primary window",
                 flags: [("--id", "Print only the window ID")]),
     CommandSpec(name: "active-screen", group: .query, app: .none, mutates: false,
-                summary: "Print the active screen's usable bounds (--json: its full screens entry)", needsAccessibility: false),
+                summary: "Print the active screen's usable bounds (--json: its full screens entry)", brief: "Print the active screen's usable bounds", needsAccessibility: false),
     CommandSpec(name: "screens", group: .query, app: .none, mutates: false,
                 summary: "List all displays with bounds and scale in window coordinates", needsAccessibility: false),
     CommandSpec(name: "pick", group: .query, app: .none, mutates: false,
@@ -4279,7 +4319,7 @@ let commandSpecs: [CommandSpec] = [
 
     // No confirmationVerb: press already prints "Performed <action> on <element>", and a second line per action is noise.
     CommandSpec(name: "press", group: .elements, app: .optional, mutates: true, synopsis: "<window>",
-                summary: "Press a button or perform another accessibility action on one element of a window, found by one or more of --path, --role and --title",
+                summary: "Press a button or perform another accessibility action on one element of a window, found by one or more of --path, --role and --title", brief: "Press a button or perform another action on one element of a window",
                 flags: [("--path <path>", "The element at this path from 'tree', such as 0.2.1; with --role/--title, the subtree to search (default: whole window)"),
                         ("--role <role>", "Only an element with exactly this role, such as AXButton"),
                         ("--title <title>", "Only an element with this whole title, ignoring case (unlike title=, not a substring); fails and lists the paths when several match"),
@@ -4346,7 +4386,7 @@ let commandSpecs: [CommandSpec] = [
                         ("--push", "Push overlapping windows away from the sidebar"),
                         ("--unpush", "Undo the last sidebar: restore the sidebar window and any windows it pushed (takes no <window>)")]),
     CommandSpec(name: "save-layout", group: .layout, app: .optional, mutates: false, synopsis: "<name-or-file>",
-                summary: "Save the windows of every app, or only of --app, as a named layout or to a JSON file",
+                summary: "Save the windows of every app, or only of --app, as a named layout or to a JSON file", brief: "Save the windows of every app, or of --app, as a named layout",
                 arguments: [("<name-or-file>", "A layout name, saved in ~/.config/window-tool/layouts/, or a file path (containing '/' or ending in .json). Replaces an existing layout of the same name.")]),
     CommandSpec(name: "restore-layout", group: .layout, app: .none, mutates: true, confirmationVerb: "Restored", synopsis: "<name-or-file>",
                 summary: "Move windows back to a saved layout (the layout names the apps)",
@@ -4363,7 +4403,7 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "highlight", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Briefly highlight a window (blocks until it dismisses)",
                 flags: [("--color <color>", "Overlay color (default: red)"),
-                        ("--duration <seconds>", "How long to show it (default: 3)")]),
+                        ("--duration <seconds>", "How long to show it, 0 to 86400; 0 dismisses it at once (default: 3)")]),
     CommandSpec(name: "flash", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Flash a colored overlay on a window",
                 flags: [("--color <color>", "Overlay color (default: green)"),
@@ -4380,13 +4420,13 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "dim", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Dim everything except a window",
                 flags: [("--opacity <value>", "Overlay opacity, 0.0-1.0 (default: 0.5)"),
-                        ("--duration <seconds>", "Dismiss after this long; 0 stays until 'undim' (default: 0)")]),
+                        ("--duration <seconds>", "Dismiss after this long, up to 86400; 0 stays until 'undim' (default: 0)")]),
     CommandSpec(name: "undim", group: .overlays, app: .none, mutates: false,
                 summary: "Remove the active dim overlay", needsAccessibility: false),
     CommandSpec(name: "identify", group: .overlays, app: .optional, mutates: false,
                 summary: "Label visible windows with their IDs (blocks until they dismiss)",
                 flags: [("--color <color>", "Label color (default: magenta)"),
-                        ("--duration <seconds>", "How long to show the labels (default: 3)")], resolvesOwnApp: true),
+                        ("--duration <seconds>", "How long to show the labels, 0 to 86400; 0 dismisses them at once (default: 3)")], resolvesOwnApp: true),
     CommandSpec(name: "shake", group: .overlays, app: .optional, mutates: true, confirmationVerb: "Shook", synopsis: "<window> [--offset N] [--count N] [--delay <seconds>]",
                 summary: "Shake a window to draw attention to it",
                 arguments: [("[offset] [count] [delay]", "Legacy forms of the options, in that order; not combined with them")],
@@ -4400,8 +4440,8 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "record", group: .capture, app: .optional, mutates: false, synopsis: "<window> --output <path>",
                 summary: "Record video of a window",
                 flags: [("--output <path>", "Output file (.mov or .mp4), required"),
-                        ("--fps N", "Frames per second, greater than 0 (default: 30)"),
-                        ("--duration <seconds>", "Stop after this long (default: until Ctrl-C)"),
+                        ("--fps N", "Frames per second, 1 to 120 (default: 30)"),
+                        ("--duration <seconds>", "Stop after this long, greater than 0 (default: until Ctrl-C)"),
                         ("--no-countdown", "Skip the 3-second countdown"),
                         ("--no-border", "Don't show a border while recording")]),
     CommandSpec(name: "pip", group: .capture, app: .optional, mutates: false, synopsis: "<window>",
@@ -4409,15 +4449,15 @@ let commandSpecs: [CommandSpec] = [
                 flags: [("--scale <factor>", "Size relative to the window, greater than 0 and at most 1 (default: 0.3)"),
                         ("--position <corner>", "top-left, top-right, bottom-left or bottom-right of the focused screen (default: bottom-right)"),
                         ("--fps N", "Most frames per second to show, 1 to 120 (default: 10)"),
-                        ("--duration <seconds>", "Close the thumbnail after this long (default: until Ctrl-C)")]),
+                        ("--duration <seconds>", "Close the thumbnail after this long, greater than 0 (default: until Ctrl-C)")]),
 
     CommandSpec(name: "help", group: .meta, app: .none, mutates: false, synopsis: "[<command>]",
                 summary: "Show all commands, or one command's arguments and options", needsAccessibility: false),
     CommandSpec(name: "commands", group: .meta, app: .none, mutates: false,
-                summary: "List every command; with --json, its arguments, options, --app usage and whether it mutates",
+                summary: "List every command; with --json, its arguments, options, --app usage and whether it mutates", brief: "List every command (--json: arguments, options and more)",
                 needsAccessibility: false),
     CommandSpec(name: "doctor", group: .meta, app: .none, mutates: false,
-                summary: "Report the version and whether Accessibility and Screen Recording are granted",
+                summary: "Report the version and whether Accessibility and Screen Recording are granted", brief: "Report the version and whether permissions are granted",
                 needsAccessibility: false),
     CommandSpec(name: "shell-init", group: .meta, app: .none, mutates: false, synopsis: "<shell>",
                 summary: "Print a shell integration snippet",
@@ -4493,9 +4533,9 @@ let globalFlags: [(name: String, description: String)] = [
 /// Prints the top-level help: every command grouped as in `commandSpecs`, then selectors, options and chaining.
 func usage() {
     let entries = commandSpecs.map { spec in
-        (group: spec.group, name: [spec.name, spec.synopsis].filter { !$0.isEmpty }.joined(separator: " "), description: spec.summary)
+        (group: spec.group, name: [spec.name, spec.synopsis].filter { !$0.isEmpty }.joined(separator: " "), description: spec.brief ?? spec.summary)
     }
-    let width = entries.map(\.name.count).max() ?? 0
+    let width = entries.map(\.name.count).filter { $0 <= helpNameColumnLimit }.max() ?? 0
     var lines = [
         "Usage: window-tool [--app <name-or-id>] [--exact] [--json] [--keep-going] [--first] [--verbose] <command> [args...]",
         "       window-tool help <command>        Show one command's arguments and options",
@@ -4746,7 +4786,7 @@ func runCommand(_ args: [String]) throws {
         }
         try pressCommand(bundleId: config.bundleId, selector: selector, path: path ?? "", role: role, title: title, action: action)
     case "columnize":
-        let gap = try takeOption("--gap", from: &rest).map { try parseInt($0, label: "gap") } ?? 10
+        let gap = try takeOption("--gap", from: &rest).map { try parseInt($0, label: "--gap") } ?? 10
         try rejectUnknownOptions(rest, command: command)
         guard rest.count >= 2 else {
             throw WindowToolError.missingArguments(command: "columnize")
@@ -4878,7 +4918,7 @@ func runCommand(_ args: [String]) throws {
             try undoCommand(steps: try steps.map { try parsePositiveInt($0, label: "--steps") } ?? 1)
         }
     case "stack":
-        var offset = try takeOption("--offset", from: &rest).map { try parseInt($0, label: "offset") }
+        var offset = try takeOption("--offset", from: &rest).map { try parseInt($0, label: "--offset") }
         try rejectUnknownOptions(rest, command: command)
         // Without --offset, a lone bare number is the legacy [offset]; anything else is a list of selectors.
         if offset == nil, rest.count == 1, let legacy = Int(rest[0]) {
@@ -4890,8 +4930,8 @@ func runCommand(_ args: [String]) throws {
     case "wait":
         let gone = takeFlag("--gone", from: &rest)
         let stableArg = try takeOption("--stable", from: &rest)
-        let timeout = try takeOption("--timeout", from: &rest).map { try parsePositiveDouble($0, label: "timeout") } ?? 30
-        let stable = try stableArg.map { try parsePositiveDouble($0, label: "stable") }
+        let timeout = try takeOption("--timeout", from: &rest).map { try parsePositiveDouble($0, label: "--timeout") } ?? 30
+        let stable = try stableArg.map { try parsePositiveDouble($0, label: "--stable") }
         if gone, let stableArg {
             throw WindowToolError.invalidValue(name: "--stable", expected: "left out when --gone is given (a window that is gone has no frame)", got: stableArg)
         }
@@ -4900,9 +4940,9 @@ func runCommand(_ args: [String]) throws {
         let namedInterval = try takeOption("--interval", from: &rest)
         let ndjson = takeFlag("--ndjson", from: &rest)
         let once = takeFlag("--once", from: &rest)
-        let watchTimeout = try takeOption("--timeout", from: &rest).map { try parsePositiveDouble($0, label: "timeout") }
+        let watchTimeout = try takeOption("--timeout", from: &rest).map { try parsePositiveDouble($0, label: "--timeout") }
         let positionalInterval = try checkArgs(rest, command: command, max: namedInterval == nil ? 1 : 0).first
-        let interval = try (namedInterval ?? positionalInterval).map { try parsePositiveDouble($0, label: "interval") } ?? 1.0
+        let interval = try (namedInterval ?? positionalInterval).map { try parsePositiveDouble($0, label: namedInterval != nil ? "--interval" : "interval") } ?? 1.0
         try watchCommand(bundleId: config.bundleId, interval: interval, ndjson: ndjson, once: once, timeout: watchTimeout)
     case "focus":
         try focusCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
@@ -4920,9 +4960,9 @@ func runCommand(_ args: [String]) throws {
         let legacyOffset = values.first
         let legacyCount = values.count >= 2 ? values[1] : nil
         let legacyDelay = values.count >= 3 ? values[2] : nil
-        let offset = try (namedOffset ?? legacyOffset).map { try parseInt($0, label: "offset") } ?? 12
-        let count = try (namedCount ?? legacyCount).map { try parsePositiveInt($0, label: "count") } ?? 6
-        let delay = try (namedDelay ?? legacyDelay).map { try parseDouble($0, label: "delay") } ?? 0.04
+        let offset = try (namedOffset ?? legacyOffset).map { try parseInt($0, label: namedOffset != nil ? "--offset" : "offset") } ?? 12
+        let count = try (namedCount ?? legacyCount).map { try parsePositiveInt($0, label: namedCount != nil ? "--count" : "count") } ?? 6
+        let delay = try (namedDelay ?? legacyDelay).map { try parseDouble($0, label: namedDelay != nil ? "--delay" : "delay") } ?? 0.04
         try shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
     case "flash":
         let flags = try parseFlashFlags(&rest)
@@ -4936,7 +4976,7 @@ func runCommand(_ args: [String]) throws {
         try checkArgs(rest, command: command)
         pickCommand()
     case "identify":
-        let identifyDuration = try takeOption("--duration", from: &rest).map { try parseDouble($0, label: "duration") } ?? 3.0
+        let identifyDuration = try takeOption("--duration", from: &rest).map(parseOverlayDuration) ?? 3.0
         let identifyColor = try takeOption("--color", from: &rest).map(parseColor) ?? .magenta
         try checkArgs(rest, command: command)
         let resolvedBundleId: String? = config.bundleId.isEmpty ? nil : try resolveAppIdentifier(config.bundleId)
@@ -5029,7 +5069,9 @@ for (index, (group, app)) in commandGroups.enumerated() {
     do {
         try runCommand(group)
         recordUndoEntry(group)
-        if config.verbose && !config.jsonOutput, let verb = commandSpec(named: group[0])?.confirmationVerb { printConfirmations(verb: verb) }
+        // `tile --untile` and `sidebar --unpush` are undo aliases, so they confirm with undo's verb.
+        let isUndoAlias = (group[0] == "tile" && group.contains("--untile")) || (group[0] == "sidebar" && group.contains("--unpush"))
+        if config.verbose && !config.jsonOutput, let verb = commandSpec(named: isUndoAlias ? "undo" : group[0])?.confirmationVerb { printConfirmations(verb: verb) }
         reportAffectedWindows(asJSON: config.jsonOutput && commandSpec(named: group[0])?.mutates == true && !config.printedOwnResult)
         config.printedOwnResult = false
         recordChainResult()

@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] shake <window> [--offset N] [--count N] [--dela
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command; with legacy positional values (see Details), bare numbers in a chain are read as `[offset] [count] [delay]` unless four are given, so name another window with `id=` or `title=`. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`; with legacy positional values (see Details), bare numbers in a chain are read as `[offset] [count] [delay]` unless four are given, so name another window with `id=` or `title=`. |
 
 ## Options
 

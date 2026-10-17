@@ -12,14 +12,14 @@ window-tool [--app <name-or-id>] highlight <window> [--color <color>] [--duratio
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`. |
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
 | `--color <color>` | Border color (default: red) |
-| `--duration <seconds>` | How long to show the highlight (default: 3.0) |
+| `--duration <seconds>` | How long to show the highlight, 0 to 86400; 0 dismisses it at once (default: 3.0) |
 
 ## Details
 

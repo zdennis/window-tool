@@ -199,7 +199,7 @@ $ window-tool --json --app Finder info 99
 | 6 | `close` was blocked by an unsaved-changes prompt | `unsaved_changes` |
 | 7 | `wait`, or `watch --once` with `--timeout`, timed out | `timeout` |
 
-New error codes may be added; match on the exit code for the category and on `code` for the specific case.
+New error codes may be added; match on the exit code for the category and on `code` for the specific case. For `invalid_value`, `details.name` is the option as spelled when the value came from one (`--opacity`, `--size`, `--fps`) and a bare word for a positional argument (`index`, `x`, `width`).
 
 ### Mutating command results
 

@@ -12,15 +12,15 @@ window-tool [--app <name-or-id>] record <window> --output <path> [options]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`. |
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
 | `--output <path>` | Output file path (.mov or .mp4) -- required |
-| `--fps <N>` | Frames per second, greater than 0 (default: 30) |
-| `--duration <seconds>` | Stop recording after this many seconds |
+| `--fps <N>` | Frames per second, 1 to 120 (default: 30) |
+| `--duration <seconds>` | Stop recording after this many seconds, greater than 0 |
 | `--no-countdown` | Skip the 3-second countdown |
 | `--no-border` | Don't show a border overlay during recording |
 

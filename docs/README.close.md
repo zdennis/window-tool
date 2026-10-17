@@ -13,7 +13,7 @@ window-tool --app <name-or-id> close --all
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes, unless `--all` | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes, unless `--all` | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`. |
 
 ## Options
 

@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] resize <window> <width> <height>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command; in a chain, two numbers are read as `<width> <height>`. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command, unless this command names a different `--app`; in a chain, two numbers are read as `<width> <height>`. |
 | `<width>` | Yes | New width |
 | `<height>` | Yes | New height |
 

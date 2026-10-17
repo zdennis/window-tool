@@ -13,7 +13,7 @@ window-tool [--app <name-or-id>] identify [--color <color>] [--duration <seconds
 | Option | Description |
 |--------|-------------|
 | `--color <color>` | Overlay color (default: magenta) |
-| `--duration <seconds>` | How long to show the overlays (default: 3.0) |
+| `--duration <seconds>` | How long to show the overlays, 0 to 86400; 0 dismisses them at once (default: 3.0) |
 
 ## Details
 
