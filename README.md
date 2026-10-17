@@ -84,7 +84,7 @@ Use `--app` to target a specific application by name or bundle ID. When using `i
 
 ### Command chaining
 
-Use `+` to run multiple commands in sequence, sharing `--app` and `--json` flags. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once:
+Use `+` to run multiple commands in sequence, sharing `--app` and `--json` flags. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once. Once a command resolves a window, later commands in the chain target it by window ID, so they keep hitting the same window even after `focus` reorders the window list:
 
 ```sh
 # Snap window 0 to center, then focus and highlight it (selector inherited)

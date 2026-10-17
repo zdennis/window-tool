@@ -507,7 +507,17 @@ func requireApp(_ bundleId: String) throws -> AXUIElement {
     return app
 }
 
+/// Resolves a selector to a window. When chaining, pins the inherited selector to the window's
+/// CGWindowID so a later command still targets it after an earlier one (e.g. focus) reorders the AX window list.
 func resolveWindow(bundleId: String, selector: WindowSelector) throws -> WindowInfo {
+    let window = try lookUpWindow(bundleId: bundleId, selector: selector)
+    if config.chaining, let windowID = window.windowID {
+        config.lastSelector = .byWindowID(windowID)
+    }
+    return window
+}
+
+private func lookUpWindow(bundleId: String, selector: WindowSelector) throws -> WindowInfo {
     // For byWindowID with no --app, go straight to cross-app lookup
     if case .byWindowID(let windowID) = selector, bundleId.isEmpty {
         if let found = findWindowByID(windowID) {
