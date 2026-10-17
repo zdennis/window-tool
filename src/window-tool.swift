@@ -1745,18 +1745,62 @@ enum SnapPosition: String, CaseIterable {
     case bottomLeft = "bottom-left"
     case bottomRight = "bottom-right"
     case center, maximize
+    case leftThird = "left-third"
+    case centerThird = "center-third"
+    case rightThird = "right-third"
+    case leftTwoThirds = "left-two-thirds"
+    case rightTwoThirds = "right-two-thirds"
 
     static var allNames: String {
         allCases.map(\.rawValue).joined(separator: ", ")
     }
+
+    /// The region as fractions of the visible frame. Add new positions that are plain regions here, not to the switch in snapCommand.
+    var fractions: SnapFractions? {
+        switch self {
+        case .leftThird: return SnapFractions(x: 0, y: 0, width: 1.0 / 3, height: 1)
+        case .centerThird: return SnapFractions(x: 1.0 / 3, y: 0, width: 1.0 / 3, height: 1)
+        case .rightThird: return SnapFractions(x: 2.0 / 3, y: 0, width: 1.0 / 3, height: 1)
+        case .leftTwoThirds: return SnapFractions(x: 0, y: 0, width: 2.0 / 3, height: 1)
+        case .rightTwoThirds: return SnapFractions(x: 1.0 / 3, y: 0, width: 2.0 / 3, height: 1)
+        default: return nil
+        }
+    }
 }
 
-/// Snaps a window to a named screen region.
-func snapCommand(bundleId: String, selector: WindowSelector, position: SnapPosition) throws {
+/// A region of the visible frame as fractions from 0 to 1, origin at the top left.
+struct SnapFractions {
+    let x, y, width, height: Double
+}
+
+/// Parses `--rect=x,y,w,h`: four fractions that must lie inside the visible frame.
+func parseRectFlag(_ args: inout [String]) throws -> SnapFractions? {
+    guard let value = try takeOption("--rect", from: &args) else { return nil }
+    let parts = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+    guard parts.count == 4 else {
+        throw WindowToolError.invalidValue(name: "rect", expected: "four comma-separated fractions: x,y,width,height", got: value)
+    }
+    let v = try zip(["x", "y", "width", "height"], parts).map { try parseDouble($1, label: "rect \($0)") }
+    let eps = 1e-9
+    guard v[0] >= 0, v[1] >= 0, v[2] > 0, v[3] > 0, v[0] + v[2] <= 1 + eps, v[1] + v[3] <= 1 + eps else {
+        throw WindowToolError.invalidValue(name: "rect", expected: "fractions of the visible frame with x,y >= 0, width,height > 0, x+width <= 1 and y+height <= 1", got: value)
+    }
+    return SnapFractions(x: v[0], y: v[1], width: v[2], height: v[3])
+}
+
+/// Snaps a window to a named screen region, or to `rect` (fractions of the visible frame).
+func snapCommand(bundleId: String, selector: WindowSelector, position: SnapPosition?, rect: SnapFractions? = nil) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     let bounds = screenBoundsForWindow(window)
     let halfW = bounds.width / 2
     let halfH = bounds.height / 2
+
+    if let f = rect ?? position?.fractions {
+        moveWindow(window.element, x: bounds.x + bounds.width * f.x, y: bounds.y + bounds.height * f.y)
+        resizeWindow(window.element, width: bounds.width * f.width, height: bounds.height * f.height)
+        return
+    }
+    guard let position else { throw WindowToolError.missingArguments(command: "snap") }
 
     switch position {
     case .left:
@@ -1790,6 +1834,8 @@ func snapCommand(bundleId: String, selector: WindowSelector, position: SnapPosit
     case .maximize:
         moveWindow(window.element, x: bounds.x, y: bounds.y)
         resizeWindow(window.element, width: bounds.width, height: bounds.height)
+    case .leftThird, .centerThird, .rightThird, .leftTwoThirds, .rightTwoThirds:
+        break // positions in `SnapPosition.fractions` return above
     }
 }
 
@@ -3211,9 +3257,10 @@ let commandSpecs: [CommandSpec] = [
                         ("--timeout <seconds>", "Give up after this long, greater than 0 (default: 30)")],
                 resolvesOwnApp: true),
 
-    CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position>",
+    CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position> | <window> --rect=<x,y,w,h>",
                 summary: "Snap a window to a screen region",
-                arguments: [("<position>", SnapPosition.allNames)]),
+                arguments: [("<position>", SnapPosition.allNames)],
+                flags: [("--rect <x,y,w,h>", "Snap to a region given as fractions of the visible frame (0 to 1, origin top left) instead of a position, e.g. --rect=0,0,0.7,1")]),
     CommandSpec(name: "move", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <x> <y> [<width> <height>]",
                 summary: "Move a window, optionally resizing it",
                 arguments: [("<x> <y>", "Top-left corner in screen points"),
@@ -3629,14 +3676,20 @@ func runCommand(_ args: [String]) throws {
         let height = CGFloat(try parseDouble(values[1], label: "height"))
         try resizeCommand(bundleId: config.bundleId, selector: selector, width: width, height: height)
     case "snap":
-        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [1])
-        guard let posStr = values.first else {
-            throw WindowToolError.missingArguments(command: "snap")
+        let rect = try parseRectFlag(&rest)
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [rect == nil ? 1 : 0])
+        if let rect {
+            try checkArgs(values, command: command)
+            try snapCommand(bundleId: config.bundleId, selector: selector, position: nil, rect: rect)
+        } else {
+            guard let posStr = values.first else {
+                throw WindowToolError.missingArguments(command: "snap")
+            }
+            guard let position = SnapPosition(rawValue: posStr) else {
+                throw WindowToolError.unknownChoice(kind: "position", value: posStr, choices: SnapPosition.allCases.map(\.rawValue))
+            }
+            try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
         }
-        guard let position = SnapPosition(rawValue: posStr) else {
-            throw WindowToolError.unknownChoice(kind: "position", value: posStr, choices: SnapPosition.allCases.map(\.rawValue))
-        }
-        try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
         let (side, fullHeight, fullWidth, push) = try parseSidebarFlags(&rest)
         if takeFlag("--unpush", from: &rest) {

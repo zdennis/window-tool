@@ -84,7 +84,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `shake` | [README](docs/README.shake.md) | Shake a window to draw attention |
 | `shell-init` | [README](docs/README.shell-init.md) | Print shell integration snippet |
 | `sidebar` | [README](docs/README.sidebar.md) | Pin a window to screen edge as a sidebar |
-| `snap` | [README](docs/README.snap.md) | Snap a window to a screen region |
+| `snap` | [README](docs/README.snap.md) | Snap a window to a screen region, thirds, or a fractional `--rect` |
 | `stack` | [README](docs/README.stack.md) | Cascade all or selected windows with an offset |
 | `tile` | [README](docs/README.tile.md) | Tile windows in a grid layout |
 | `unborder` | [README](docs/README.unborder.md) | Remove border overlays for an app |
