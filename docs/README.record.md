@@ -19,7 +19,7 @@ window-tool [--app <name-or-id>] record <window> --output <path> [options]
 | Option | Description |
 |--------|-------------|
 | `--output <path>` | Output file path (.mov or .mp4) -- required |
-| `--fps <N>` | Frames per second (default: 30) |
+| `--fps <N>` | Frames per second, greater than 0 (default: 30) |
 | `--duration <seconds>` | Stop recording after this many seconds |
 | `--no-countdown` | Skip the 3-second countdown |
 | `--no-border` | Don't show a border overlay during recording |

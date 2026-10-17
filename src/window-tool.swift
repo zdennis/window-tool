@@ -126,6 +126,20 @@ func parseDouble(_ s: String, label: String) throws -> Double {
     return v
 }
 
+func parsePositiveInt(_ s: String, label: String) throws -> Int {
+    guard let v = Int(s), v > 0 else {
+        throw WindowToolError.invalidArgument(value: s, label: "\(label) (must be greater than 0)")
+    }
+    return v
+}
+
+func parsePositiveDouble(_ s: String, label: String) throws -> Double {
+    guard let v = Double(s), v.isFinite, v > 0 else {
+        throw WindowToolError.invalidArgument(value: s, label: "\(label) (must be greater than 0)")
+    }
+    return v
+}
+
 // MARK: - Color Parsing
 
 let validColors = ["red", "green", "blue", "yellow", "orange", "purple", "white", "cyan", "magenta", "random"]
@@ -163,7 +177,7 @@ func parseFlashFlags(_ args: inout [String]) throws -> (color: NSColor, count: I
         guard countIdx + 1 < args.count else {
             throw WindowToolError.invalidArgument(value: "--count", label: "flag (requires a value)")
         }
-        count = try parseInt(args[countIdx + 1], label: "count")
+        count = try parsePositiveInt(args[countIdx + 1], label: "count")
         args.removeSubrange(countIdx...countIdx + 1)
     }
     return (color, count)
@@ -253,7 +267,7 @@ func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, unt
         guard colsIdx + 1 < args.count else {
             throw WindowToolError.invalidArgument(value: "--cols", label: "flag (requires a value)")
         }
-        cols = try parseInt(args[colsIdx + 1], label: "cols")
+        cols = try parsePositiveInt(args[colsIdx + 1], label: "cols")
         args.removeSubrange(colsIdx...colsIdx + 1)
     }
     if let untileIdx = args.firstIndex(of: "--untile") {
@@ -1740,7 +1754,7 @@ func parseRecordFlags(_ args: [String]) throws -> (output: String, fps: Int, dur
         guard fpsIdx + 1 < args.count else {
             throw WindowToolError.invalidArgument(value: "--fps", label: "flag (requires a value)")
         }
-        fps = try parseInt(args[fpsIdx + 1], label: "fps")
+        fps = try parsePositiveInt(args[fpsIdx + 1], label: "fps")
     }
 
     var duration: Double? = nil
@@ -2483,13 +2497,13 @@ func usage() {
       pick                                     Click a window to get its ID
       preview <window> [--output <path>]       Capture a window screenshot as PNG
       record <window> --output <path> [options]  Record video of a window
-        Record options: [--fps 30] [--duration <seconds>] [--no-countdown] [--no-border]
+        Record options: [--fps 30 (>0)] [--duration <seconds>] [--no-countdown] [--no-border]
       resize <window> <width> <height>         Resize window
       restore                                  Restore all minimized windows
       restore-layout <file>                    Restore window layout from a JSON file
       save-layout <file>                       Save window layout to a JSON file
       screens                                  List all displays with bounds
-      shake <window> [offset] [count] [delay]  Shake a window
+      shake <window> [offset] [count>0] [delay]  Shake a window
       shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
       sidebar <window> [--side=left|right|top|bottom] [options]  Pin window to screen edge
       sidebar --unpush                       Restore windows pushed by --push
@@ -2501,7 +2515,7 @@ func usage() {
       unborder-all                             Remove all active borders
       undim                                    Remove active dim overlay
       unfullscreen <window>                    Exit macOS fullscreen mode
-      watch [interval]                         Watch for window changes (default: 1.0s)
+      watch [interval>0]                       Watch for window changes (default: 1.0s)
 
     Window selectors:
       <window> can be:
@@ -2648,7 +2662,7 @@ func runCommand(_ args: [String]) throws {
 
             Options:
               --gap N             Gap between windows in pixels (default: 10)
-              --cols N            Force a specific number of columns
+              --cols N            Force a specific number of columns (> 0)
               --untile            Restore windows to their pre-tile positions
               --help, -h          Show this help
             """
@@ -2752,7 +2766,7 @@ func runCommand(_ args: [String]) throws {
         let offset = args.count >= 2 ? try parseInt(args[1], label: "offset") : 30
         try stackCommand(bundleId: config.bundleId, offsetStep: offset)
     case "watch":
-        let interval = args.count >= 2 ? try parseDouble(args[1], label: "interval") : 1.0
+        let interval = args.count >= 2 ? try parsePositiveDouble(args[1], label: "interval") : 1.0
         try watchCommand(bundleId: config.bundleId, interval: interval)
     case "focus":
         try focusCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
@@ -2763,7 +2777,7 @@ func runCommand(_ args: [String]) throws {
     case "shake":
         let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [0, 1, 2, 3])
         let offset = rest.count >= 1 ? try parseInt(rest[0], label: "offset") : 12
-        let count = rest.count >= 2 ? try parseInt(rest[1], label: "count") : 6
+        let count = rest.count >= 2 ? try parsePositiveInt(rest[1], label: "count") : 6
         let delay = rest.count >= 3 ? try parseDouble(rest[2], label: "delay") : 0.04
         try shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
     case "flash":

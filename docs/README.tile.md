@@ -20,7 +20,7 @@ window-tool [--app <name-or-id>] tile --untile
 | Option | Description |
 |--------|-------------|
 | `--gap N` | Gap between windows in pixels (default: 10) |
-| `--cols N` | Force a specific number of columns |
+| `--cols N` | Force a specific number of columns (must be greater than 0) |
 | `--untile` | Restore windows to their pre-tile positions |
 | `--help`, `-h` | Show command-specific help |
 

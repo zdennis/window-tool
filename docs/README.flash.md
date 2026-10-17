@@ -19,7 +19,7 @@ window-tool [--app <name-or-id>] flash <window> [--color <color>] [--count <N>]
 | Option | Description |
 |--------|-------------|
 | `--color <color>` | Overlay color (default: green) |
-| `--count <N>` | Number of flashes (default: 1) |
+| `--count <N>` | Number of flashes, greater than 0 (default: 1) |
 
 ## Details
 

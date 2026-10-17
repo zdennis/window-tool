@@ -12,7 +12,7 @@ window-tool [--app <bundle-id>] watch [interval]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `[interval]` | No | Poll interval in seconds (default: 1.0) |
+| `[interval]` | No | Poll interval in seconds, greater than 0 (default: 1.0) |
 
 ## Details
 
