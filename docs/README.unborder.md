@@ -21,7 +21,7 @@ Without a window selector, removes all borders on windows owned by the target ap
 ## Examples
 
 ```sh
-window-tool unborder
+window-tool --app Safari unborder
 window-tool unborder 0
 window-tool unborder id=1341
 

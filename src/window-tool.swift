@@ -1056,9 +1056,38 @@ func highlightCommand(bundleId: String, selector: WindowSelector, color: NSColor
     app.run()
 }
 
+// MARK: - Overlay PID Files
+
+func readPID(at path: String) -> pid_t? {
+    guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+    return pid_t(content.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
+func processName(of pid: pid_t) -> String? {
+    var buffer = [CChar](repeating: 0, count: 256)
+    guard proc_name(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+    return String(cString: buffer)
+}
+
+/// Sends SIGTERM only when `pid` is a window-tool process, so a stale PID file
+/// pointing at a recycled PID cannot kill an unrelated process. Returns whether the signal was sent.
+@discardableResult
+func terminateOverlay(pid: pid_t) -> Bool {
+    guard let name = processName(of: pid), name == processName(of: getpid()) else { return false }
+    return kill(pid, SIGTERM) == 0
+}
+
+/// Deletes a PID file only if it still holds this process's PID, so a replaced overlay
+/// exiting late does not remove the PID file of the overlay that replaced it.
+func removePIDFileIfOwned(_ path: String) {
+    if readPID(at: path) == getpid() {
+        try? FileManager.default.removeItem(atPath: path)
+    }
+}
+
 // MARK: - Dim Overlay
 
-let dimPIDFile = "/tmp/window-tool-dim.pid"
+let dimPIDFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-dim.pid")
 
 func parseDimFlags(_ args: [String]) throws -> (opacity: Double, duration: Double) {
     var opacity: Double = 0.5
@@ -1093,12 +1122,8 @@ class DimOverlayView: NSView {
 }
 
 func killExistingDim() {
-    guard FileManager.default.fileExists(atPath: dimPIDFile),
-          let pidStr = try? String(contentsOfFile: dimPIDFile, encoding: .utf8),
-          let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-        return
-    }
-    kill(pid, SIGTERM)
+    guard let pid = readPID(at: dimPIDFile) else { return }
+    terminateOverlay(pid: pid)
     try? FileManager.default.removeItem(atPath: dimPIDFile)
 }
 
@@ -1155,7 +1180,7 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
     try "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: dimPIDFile, atomically: true, encoding: .utf8)
 
     let cleanupPID: @convention(c) (Int32) -> Void = { _ in
-        try? FileManager.default.removeItem(atPath: dimPIDFile)
+        removePIDFileIfOwned(dimPIDFile)
         flushJSONAndExit(0)
     }
     signal(SIGTERM, cleanupPID)
@@ -1164,7 +1189,7 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
     if duration > 0 {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
             for overlay in overlays { overlay.close() }
-            try? FileManager.default.removeItem(atPath: dimPIDFile)
+            removePIDFileIfOwned(dimPIDFile)
             app.stop(nil)
             let dummyEvent = NSEvent.otherEvent(with: .applicationDefined,
                                                 location: .zero, modifierFlags: [],
@@ -1179,21 +1204,19 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
 }
 
 func undimCommand() throws {
-    guard FileManager.default.fileExists(atPath: dimPIDFile),
-          let pidStr = try? String(contentsOfFile: dimPIDFile, encoding: .utf8),
-          let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+    guard let pid = readPID(at: dimPIDFile) else {
         throw WindowToolError.invalidArgument(value: "none", label: "active dim overlay (run 'dim' first)")
     }
-    let result = kill(pid, SIGTERM)
+    let terminated = terminateOverlay(pid: pid)
     try? FileManager.default.removeItem(atPath: dimPIDFile)
-    if result != 0 {
-        throw WindowToolError.invalidArgument(value: "\(pid)", label: "dim process (process not found)")
+    if !terminated {
+        throw WindowToolError.invalidArgument(value: "\(pid)", label: "dim process (not running, or not a window-tool process)")
     }
 }
 
 // MARK: - Border Overlay
 
-let borderPidDir = "/tmp/window-tool-borders"
+let borderPidDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-borders")
 
 class BorderView: NSView {
     var borderColor: NSColor = .blue
@@ -1226,9 +1249,7 @@ func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, w
     try FileManager.default.createDirectory(atPath: appBundleDir, withIntermediateDirectories: true)
     let pidFile = "\(appBundleDir)/\(windowID).pid"
 
-    if let existingPid = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-       let pid = Int32(existingPid) {
-        kill(pid, SIGTERM)
+    if let existingPid = readPID(at: pidFile), terminateOverlay(pid: existingPid) {
         usleep(200_000)
     }
 
@@ -1260,7 +1281,7 @@ func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, w
 
     func cleanupAndExit() {
         overlay.close()
-        try? FileManager.default.removeItem(atPath: pidFile)
+        removePIDFileIfOwned(pidFile)
         app.stop(nil)
         let event = NSEvent.otherEvent(with: .applicationDefined,
             location: .zero, modifierFlags: [], timestamp: 0,
@@ -1297,10 +1318,10 @@ func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, w
     }
 
     app.run()
-    try? FileManager.default.removeItem(atPath: pidFile)
+    removePIDFileIfOwned(pidFile)
 }
 
-func unborderCommand(bundleId: String, selector: WindowSelector? = nil) {
+func unborderCommand(bundleId: String, selector: WindowSelector? = nil) throws {
     if let selector = selector {
         guard let window = try? resolveWindow(bundleId: bundleId, selector: selector),
               let windowID = window.windowID else {
@@ -1308,9 +1329,8 @@ func unborderCommand(bundleId: String, selector: WindowSelector? = nil) {
         }
         let appDir = borderOwnerDir(for: window)
         let pidFile = "\(appDir)/\(windowID).pid"
-        if let content = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-           let pid = Int32(content) {
-            kill(pid, SIGTERM)
+        if let pid = readPID(at: pidFile) {
+            terminateOverlay(pid: pid)
         }
         try? FileManager.default.removeItem(atPath: pidFile)
         if let remaining = try? FileManager.default.contentsOfDirectory(atPath: appDir), remaining.isEmpty {
@@ -1320,15 +1340,15 @@ func unborderCommand(bundleId: String, selector: WindowSelector? = nil) {
     }
 
     // Borders are filed under the owning app (see borderOwnerDir), so --app must name the owner here.
+    guard !bundleId.isEmpty else { throw WindowToolError.appRequired }
     let appDir = "\(borderPidDir)/\(bundleId)"
     guard let files = try? FileManager.default.contentsOfDirectory(atPath: appDir) else {
         return
     }
     for file in files where file.hasSuffix(".pid") {
         let pidFile = "\(appDir)/\(file)"
-        if let content = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-           let pid = Int32(content) {
-            kill(pid, SIGTERM)
+        if let pid = readPID(at: pidFile) {
+            terminateOverlay(pid: pid)
         }
         try? FileManager.default.removeItem(atPath: pidFile)
     }
@@ -1340,7 +1360,7 @@ func unborderAllCommand() {
         return
     }
     for bundleDir in bundleDirs {
-        unborderCommand(bundleId: bundleDir)
+        try? unborderCommand(bundleId: bundleDir)
     }
 }
 
@@ -2511,7 +2531,7 @@ func usage() {
       stack [offset]                           Cascade windows with offset (default: 30)
       tile [<w>...] [--gap N] [--cols N]      Tile windows in a grid layout
       tile --untile                            Restore windows to pre-tile positions
-      unborder [<window>]                      Remove borders for target app (or one window)
+      unborder [<window>]                      Remove borders for --app (or one window); --app required without <window>
       unborder-all                             Remove all active borders
       undim                                    Remove active dim overlay
       unfullscreen <window>                    Exit macOS fullscreen mode
@@ -2815,9 +2835,9 @@ func runCommand(_ args: [String]) throws {
     case "unborder":
         if args.count >= 2 || (config.chaining && config.lastSelector != nil) {
             let (selector, _) = try resolveSelectorWithFlags(args)
-            unborderCommand(bundleId: config.bundleId, selector: selector)
+            try unborderCommand(bundleId: config.bundleId, selector: selector)
         } else {
-            unborderCommand(bundleId: config.bundleId)
+            try unborderCommand(bundleId: config.bundleId)
         }
     case "unborder-all":
         unborderAllCommand()
