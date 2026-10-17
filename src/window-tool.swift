@@ -718,17 +718,14 @@ func activeScreenCommand() {
     // Return the screen containing the mouse cursor (the "active" screen)
     let mouseLocation = NSEvent.mouseLocation
     let screen = NSScreen.screens.first { $0.frame.contains(mouseLocation) } ?? NSScreen.main ?? NSScreen.screens[0]
-    let frame = screen.frame
-    let visible = screen.visibleFrame
-    // Output: x,y width height visible_x,visible_y visible_width visible_height
-    // NSScreen y-axis is bottom-up; convert visible frame to top-left origin for window positioning
-    let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
+    // Usable area (excludes menu bar and Dock) in AX global top-left coordinates, ready for window positioning
+    let visible = cocoaToAX(rect: screen.visibleFrame)
     if config.jsonOutput {
-        printJSON(["x": Int(frame.origin.x), "y": Int(topLeftY),
+        printJSON(["x": Int(visible.origin.x), "y": Int(visible.origin.y),
                    "width": Int(visible.width), "height": Int(visible.height)])
     } else {
         print("X\tY\tWIDTH\tHEIGHT")
-        print("\(Int(frame.origin.x))\t\(Int(topLeftY))\t\(Int(visible.width))\t\(Int(visible.height))")
+        print("\(Int(visible.origin.x))\t\(Int(visible.origin.y))\t\(Int(visible.width))\t\(Int(visible.height))")
     }
 }
 
@@ -2420,7 +2417,7 @@ func usage() {
     Usage: window-tool [--app <name-or-id>] <command> [args...]
 
     Commands:
-      active-screen                            Print active screen bounds (x, y, width, height)
+      active-screen                            Print active screen usable bounds (x, y, width, height)
       active-window [--id]                     Print info about the frontmost app's primary window
       border <window> [--color blue] [--width 3]    Add a persistent border that tracks a window
       center <window> [--size=N or --size=W,H]  Center window on screen (optionally resize)

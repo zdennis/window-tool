@@ -37,7 +37,7 @@ Use `--app` to target a specific application by name or bundle ID. When using `i
 
 | Command | Docs | Description |
 |---------|------|-------------|
-| `active-screen` | [README](docs/README.active-screen.md) | Print active screen bounds |
+| `active-screen` | [README](docs/README.active-screen.md) | Print active screen usable bounds |
 | `active-window` | [README](docs/README.active-window.md) | Print info about the frontmost window |
 | `border` | [README](docs/README.border.md) | Add a persistent border that tracks a window |
 | `center` | [README](docs/README.center.md) | Center a window on screen, optionally resizing |

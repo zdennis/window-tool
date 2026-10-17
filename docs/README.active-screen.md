@@ -1,6 +1,6 @@
 # window-tool active-screen
 
-Print the bounds of the screen where the mouse cursor is.
+Print the usable bounds of the screen where the mouse cursor is.
 
 ## Usage
 
@@ -10,11 +10,12 @@ window-tool active-screen
 
 ## Details
 
-Outputs tab-separated values: x, y, width, height. Coordinates use top-left origin, suitable for window positioning. With `--json`, outputs a JSON object.
+Outputs tab-separated values: x, y, width, height. The rectangle is the screen's visible area (excluding the menu bar and Dock), in the same global top-left coordinates that `move` and `info` use, so it works on secondary displays and with a left- or right-side Dock. With `--json`, outputs a JSON object.
 
 ## Examples
 
 ```sh
 window-tool active-screen
-# 0    0    5120    2129
+# X    Y     WIDTH    HEIGHT
+# 0    34    1728     1083
 ```
