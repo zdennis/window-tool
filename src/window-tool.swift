@@ -72,7 +72,12 @@ enum WindowToolError: LocalizedError {
     case accessibilityNotEnabled
     case invalidArgument(value: String, label: String)
     case appRequired
-    case missingWindowSelector
+    case missingWindowSelector(command: String)
+    case unknownOption(String, command: String)
+    case repeatedOption(String, command: String)
+    case unexpectedArgument(String, command: String)
+    case optionNeedsValue(String)
+    case optionTakesNoValue(String, command: String)
     case missingArguments(command: String)
     case unknownCommand(String)
     case operationFailed(String)
@@ -98,8 +103,18 @@ enum WindowToolError: LocalizedError {
             return "'\(value)' is not a valid \(label)"
         case .appRequired:
             return "--app is required for this command"
-        case .missingWindowSelector:
-            return "Missing window selector. Use an index (0, 1, ...), id=<N>, or title=<pattern>\nRun 'window-tool help' for usage."
+        case .missingWindowSelector(let command):
+            return "Missing window selector for '\(command)'. Use an index (0, 1, ...), id=<N>, or title=<pattern>.\nRun 'window-tool \(command) --help' for usage."
+        case .unknownOption(let option, let command):
+            return "Unknown option '\(option)' for '\(command)'. Run 'window-tool \(command) --help'."
+        case .repeatedOption(let option, let command):
+            return "Option '\(option)' given more than once for '\(command)'. Run 'window-tool \(command) --help'."
+        case .unexpectedArgument(let arg, let command):
+            return "Unexpected argument '\(arg)' for '\(command)'. Run 'window-tool \(command) --help'."
+        case .optionNeedsValue(let option):
+            return "Option '\(option)' requires a value"
+        case .optionTakesNoValue(let option, let command):
+            return "Option '\(option)' takes no value for '\(command)'. Run 'window-tool \(command) --help'."
         case .missingArguments(let command):
             let usage = commandSpec(named: command)?.usageLine ?? "window-tool \(command)"
             return "Missing arguments\nUsage: \(usage)\nRun 'window-tool help \(command)' for details."
@@ -151,7 +166,7 @@ func takeOption(_ name: String, from args: inout [String]) throws -> String? {
         return String(args.remove(at: idx).dropFirst(name.count + 1))
     }
     guard idx + 1 < args.count else {
-        throw WindowToolError.invalidArgument(value: name, label: "flag (requires a value)")
+        throw WindowToolError.optionNeedsValue(name)
     }
     let value = args[idx + 1]
     args.removeSubrange(idx...idx + 1)
@@ -163,6 +178,34 @@ func takeFlag(_ name: String, from args: inout [String]) -> Bool {
     guard let idx = args.firstIndex(of: name) else { return false }
     args.remove(at: idx)
     return true
+}
+
+/// Throws for the first option left in `args` after a command has taken the ones it knows:
+/// a value given to a boolean flag, a repeat of a known option, or one the command does not take.
+/// Known options come from the command's spec; negative numbers such as `-100` are values, not options.
+func rejectUnknownOptions(_ args: [String], command: String) throws {
+    guard let option = args.first(where: { $0.hasPrefix("-") && Double($0) == nil }) else { return }
+    let name = String(option.prefix { $0 != "=" })
+    // Spec flag names are "--size N" for options with a value and "--push" for boolean flags.
+    let specFlags = commandSpec(named: command)?.flags.map(\.name) ?? []
+    if option.contains("="), (["--json"] + specFlags).contains(name) {
+        throw WindowToolError.optionTakesNoValue(name, command: command)
+    }
+    let known = ["--app", "--json"] + specFlags.map { String($0.prefix { $0 != " " }) }
+    throw known.contains(name)
+        ? WindowToolError.repeatedOption(name, command: command)
+        : WindowToolError.unknownOption(name, command: command)
+}
+
+/// Checks a command's leftover args once its options are taken: rejects any option and any
+/// positional beyond the first `max`, and returns the positionals.
+@discardableResult
+func checkArgs(_ args: [String], command: String, max: Int = 0) throws -> [String] {
+    try rejectUnknownOptions(args, command: command)
+    if let extra = args.dropFirst(max).first {
+        throw WindowToolError.unexpectedArgument(extra, command: command)
+    }
+    return args
 }
 
 // MARK: - Color Parsing
@@ -412,9 +455,8 @@ enum WindowSelector {
     case byWindowID(CGWindowID)
 }
 
-/// Parses a window selector from a string argument.
-/// Supports `id=<windowID>` for CGWindowID, `title=<pattern>` for title match, or a plain integer for index.
-func parseWindowSelector(_ arg: String) throws -> WindowSelector {
+/// Parses `id=<windowID>` or `title=<pattern>`, or returns nil for any other arg (a bare index or a number argument).
+func parseNamedSelector(_ arg: String) throws -> WindowSelector? {
     if arg.hasPrefix("id=") {
         let idStr = String(arg.dropFirst(3))
         guard let id = UInt32(idStr) else {
@@ -429,47 +471,37 @@ func parseWindowSelector(_ arg: String) throws -> WindowSelector {
         }
         return .byTitle(pattern)
     }
-    return .byIndex(try parseInt(arg, label: "index"))
+    return nil
 }
 
-/// Resolves a window selector from args. If no selector arg is present and we're chaining,
-/// falls back to the previous command's selector. Updates config.lastSelector on success.
-func resolveSelector(_ args: [String], at index: Int = 1) throws -> WindowSelector {
-    if args.count > index {
-        let selector = try parseWindowSelector(args[index])
+/// Parses a window selector from a string argument.
+/// Supports `id=<windowID>` for CGWindowID, `title=<pattern>` for title match, or a plain integer for index.
+func parseWindowSelector(_ arg: String) throws -> WindowSelector {
+    try parseNamedSelector(arg) ?? .byIndex(try parseInt(arg, label: "index"))
+}
+
+/// Every command that takes one <window> resolves it here, after taking its own options from `args`
+/// (the args after the command name). Returns the selector and the positionals after it.
+/// `argCounts` lists how many positionals the command accepts after its selector. When chaining, args whose
+/// count matches one of those inherit the previous selector, so `+ move 100 200 800 600` moves the inherited
+/// window instead of reading 100 as an index. An `id=` or `title=` arg is always a selector.
+/// Throws for leftover options and for more positionals than the command accepts.
+func resolveSelectorAndArgs(_ args: [String], command: String, argCounts: [Int] = [0]) throws -> (selector: WindowSelector, rest: [String]) {
+    try rejectUnknownOptions(args, command: command)
+    let named = try args.first.flatMap(parseNamedSelector)
+    let selector: WindowSelector
+    var rest = args
+    if named == nil, config.chaining, let last = config.lastSelector, argCounts.contains(args.count) || args.isEmpty {
+        selector = last
+    } else if let first = args.first {
+        selector = try named ?? parseWindowSelector(first)
         config.lastSelector = selector
-        return selector
+        rest.removeFirst()
+    } else {
+        throw WindowToolError.missingWindowSelector(command: command)
     }
-    if config.chaining, let last = config.lastSelector {
-        return last
-    }
-    throw WindowToolError.missingWindowSelector
-}
-
-/// Resolves a window selector and returns the remaining args after the selector.
-/// `argCounts` lists how many positional args the command accepts after its selector. When chaining,
-/// args whose count matches one of those inherit the previous selector, so `+ move 100 200 800 600`
-/// moves the inherited window instead of reading 100 as an index. An `id=` or `title=` arg is always a selector.
-func resolveSelectorAndArgs(_ args: [String], argCounts: [Int]) throws -> (selector: WindowSelector, rest: [String]) {
-    let namesWindow = args.count >= 2 && (args[1].hasPrefix("id=") || args[1].hasPrefix("title="))
-    if config.chaining, let last = config.lastSelector, !namesWindow, argCounts.contains(args.count - 1) {
-        return (last, Array(args.dropFirst()))
-    }
-    return (try resolveSelector(args), Array(args.dropFirst(2)))
-}
-
-/// Resolves a window selector when the first arg could be a selector or a flag/value.
-/// Tries to parse args[1] as a selector; if it succeeds, returns it and the remaining args.
-/// If it fails or is absent, falls back to the inherited selector.
-func resolveSelectorWithFlags(_ args: [String]) throws -> (selector: WindowSelector, rest: [String]) {
-    if args.count >= 2, (try? parseWindowSelector(args[1])) != nil {
-        let selector = try resolveSelector(args)
-        return (selector, Array(args.dropFirst(2)))
-    }
-    if config.chaining, let last = config.lastSelector {
-        return (last, Array(args.dropFirst()))
-    }
-    return (try resolveSelector(args), Array(args.dropFirst(2)))
+    try checkArgs(rest, command: command, max: argCounts.max() ?? 0)
+    return (selector, rest)
 }
 
 func requireApp(_ bundleId: String) throws -> AXUIElement {
@@ -2706,6 +2738,7 @@ func usage() {
       --help, -h          Show help; after a command, show that command's help
       --version, -v       Print version and exit
       Options that take a value accept --flag value or --flag=value.
+      Unknown options and extra arguments are errors; the command does not run.
 
     Output:
       Results go to stdout and errors to stderr. With --json, status messages
@@ -2784,73 +2817,82 @@ let splitGroups = splitCommands(args)
 let helpTarget = splitGroups.first { $0.dropFirst().contains { $0 == "--help" || $0 == "-h" } }
 let commandGroups = helpTarget.map { [["help", $0[0]]] } ?? splitGroups
 
+/// Runs one command. Each case takes its options from `rest` first, then checks what is left with
+/// `resolveSelectorAndArgs` (commands with one <window>), `rejectUnknownOptions` (commands taking a list of
+/// windows) or `checkArgs` (the others), so unknown options and extra arguments fail before anything runs.
 func runCommand(_ args: [String]) throws {
-    let command = args[0]
+    guard let spec = commandSpec(named: args[0] == "--help" || args[0] == "-h" ? "help" : args[0]) else {
+        throw WindowToolError.unknownCommand(args[0])
+    }
+    let command = spec.name
+    var rest = Array(args.dropFirst())
 
-    let spec = commandSpec(named: command == "--help" || command == "-h" ? "help" : command)
-    if spec?.needsAccessibility == true {
+    if spec.needsAccessibility {
         try checkAccessibility()
     }
 
-    let appIndependent = spec.map { $0.app == .none || $0.resolvesOwnApp } ?? false
+    let appIndependent = spec.app == .none || spec.resolvesOwnApp
     if !appIndependent && !config.bundleId.isEmpty {
         config.bundleId = try resolveAppIdentifier(config.bundleId)
     }
 
     switch command {
     case "list":
+        try checkArgs(rest, command: command)
         let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
         try listCommand(bundleId: resolvedBundleId)
     case "info":
-        try infoCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
+        try infoCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "columnize":
-        guard args.count >= 3 else {
+        let gap = try takeOption("--gap", from: &rest).map { try parseInt($0, label: "gap") } ?? 10
+        try rejectUnknownOptions(rest, command: command)
+        guard rest.count >= 2 else {
             throw WindowToolError.missingArguments(command: "columnize")
         }
-        var columnArgs = Array(args.dropFirst())
-        let gap = try takeOption("--gap", from: &columnArgs).map { try parseInt($0, label: "gap") } ?? 10
-        let selectors = try columnArgs.map { try parseWindowSelector($0) }
+        let selectors = try rest.map { try parseWindowSelector($0) }
         try columnizeCommand(bundleId: config.bundleId, selectors: selectors, gap: gap)
     case "tile":
-        var tileArgs = Array(args.dropFirst())
-        let tileFlags = try parseTileFlags(&tileArgs)
+        let tileFlags = try parseTileFlags(&rest)
         if tileFlags.untile {
+            try checkArgs(rest, command: command)
             try untileCommand()
         } else {
-            let selectors: [WindowSelector]? = tileArgs.isEmpty ? nil : try tileArgs.map { try parseWindowSelector($0) }
+            try rejectUnknownOptions(rest, command: command)
+            let selectors: [WindowSelector]? = rest.isEmpty ? nil : try rest.map { try parseWindowSelector($0) }
             try tileCommand(bundleId: config.bundleId, selectors: selectors, gap: tileFlags.gap, colsOverride: tileFlags.cols)
         }
     case "center":
-        var (selector, rest) = try resolveSelectorWithFlags(args)
         let size = try parseSizeFlag(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
         try centerCommand(bundleId: config.bundleId, selector: selector, size: size)
     case "count":
+        try checkArgs(rest, command: command)
         try countCommand(bundleId: config.bundleId)
     case "move":
-        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [2, 4])
-        guard rest.count >= 2 else {
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [2, 4])
+        guard values.count == 2 || values.count == 4 else {
             throw WindowToolError.missingArguments(command: "move")
         }
-        let x = CGFloat(try parseDouble(rest[0], label: "x"))
-        let y = CGFloat(try parseDouble(rest[1], label: "y"))
+        let x = CGFloat(try parseDouble(values[0], label: "x"))
+        let y = CGFloat(try parseDouble(values[1], label: "y"))
         var width: CGFloat? = nil
         var height: CGFloat? = nil
-        if rest.count >= 4 {
-            width = CGFloat(try parseDouble(rest[2], label: "width"))
-            height = CGFloat(try parseDouble(rest[3], label: "height"))
+        if values.count == 4 {
+            width = CGFloat(try parseDouble(values[2], label: "width"))
+            height = CGFloat(try parseDouble(values[3], label: "height"))
         }
         try moveCommand(bundleId: config.bundleId, selector: selector, x: x, y: y, width: width, height: height)
     case "resize":
-        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [2])
-        guard rest.count >= 2 else {
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [2])
+        guard values.count == 2 else {
             throw WindowToolError.missingArguments(command: "resize")
         }
-        let width = CGFloat(try parseDouble(rest[0], label: "width"))
-        let height = CGFloat(try parseDouble(rest[1], label: "height"))
+        let width = CGFloat(try parseDouble(values[0], label: "width"))
+        let height = CGFloat(try parseDouble(values[1], label: "height"))
         try resizeCommand(bundleId: config.bundleId, selector: selector, width: width, height: height)
     case "snap":
-        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [1])
-        guard let posStr = rest.first else {
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [1])
+        guard let posStr = values.first else {
             throw WindowToolError.missingArguments(command: "snap")
         }
         guard let position = SnapPosition(rawValue: posStr) else {
@@ -2858,120 +2900,129 @@ func runCommand(_ args: [String]) throws {
         }
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
-        if args.contains("--unpush") {
+        let (side, fullHeight, fullWidth, push) = try parseSidebarFlags(&rest)
+        if takeFlag("--unpush", from: &rest) {
+            try checkArgs(rest, command: command)
             try sidebarUnpushCommand()
         } else {
-            var (selector, rest) = try resolveSelectorWithFlags(args)
-            let (side, fullHeight, fullWidth, push) = try parseSidebarFlags(&rest)
+            let selector = try resolveSelectorAndArgs(rest, command: command).selector
             try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
         }
     case "move-to-screen":
-        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [1])
-        guard let screenArg = rest.first else {
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [1])
+        guard let screenArg = values.first else {
             throw WindowToolError.missingArguments(command: "move-to-screen")
         }
         try moveToScreenCommand(bundleId: config.bundleId, selector: selector, screenIndex: try parseInt(screenArg, label: "screen"))
     case "maximize":
-        try maximizeCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
+        try maximizeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "minimize":
-        try minimizeCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
+        try minimizeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "restore":
+        try checkArgs(rest, command: command)
         try restoreCommand(bundleId: config.bundleId)
     case "save-layout":
-        guard args.count >= 2 else {
+        guard let filePath = try checkArgs(rest, command: command, max: 1).first else {
             throw WindowToolError.missingArguments(command: "save-layout")
         }
-        try saveLayoutCommand(bundleId: config.bundleId, filePath: args[1])
+        try saveLayoutCommand(bundleId: config.bundleId, filePath: filePath)
     case "restore-layout":
-        guard args.count >= 2 else {
+        guard let filePath = try checkArgs(rest, command: command, max: 1).first else {
             throw WindowToolError.missingArguments(command: "restore-layout")
         }
-        try restoreLayoutCommand(filePath: args[1])
+        try restoreLayoutCommand(filePath: filePath)
     case "stack":
-        let offset = args.count >= 2 ? try parseInt(args[1], label: "offset") : 30
+        let offset = try checkArgs(rest, command: command, max: 1).first.map { try parseInt($0, label: "offset") } ?? 30
         try stackCommand(bundleId: config.bundleId, offsetStep: offset)
     case "watch":
-        let interval = args.count >= 2 ? try parsePositiveDouble(args[1], label: "interval") : 1.0
+        let interval = try checkArgs(rest, command: command, max: 1).first.map { try parsePositiveDouble($0, label: "interval") } ?? 1.0
         try watchCommand(bundleId: config.bundleId, interval: interval)
     case "focus":
-        try focusCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
+        try focusCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "fullscreen":
-        try fullscreenCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
+        try fullscreenCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "unfullscreen":
-        try unfullscreenCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
+        try unfullscreenCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "shake":
-        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [0, 1, 2, 3])
-        let offset = rest.count >= 1 ? try parseInt(rest[0], label: "offset") : 12
-        let count = rest.count >= 2 ? try parsePositiveInt(rest[1], label: "count") : 6
-        let delay = rest.count >= 3 ? try parseDouble(rest[2], label: "delay") : 0.04
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [0, 1, 2, 3])
+        let offset = values.count >= 1 ? try parseInt(values[0], label: "offset") : 12
+        let count = values.count >= 2 ? try parsePositiveInt(values[1], label: "count") : 6
+        let delay = values.count >= 3 ? try parseDouble(values[2], label: "delay") : 0.04
         try shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
     case "flash":
-        var (selector, rest) = try resolveSelectorWithFlags(args)
         let flags = try parseFlashFlags(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
         try flashCommand(bundleId: config.bundleId, selector: selector, color: flags.color, count: flags.count)
     case "highlight":
-        var (selector, rest) = try resolveSelectorWithFlags(args)
         let hlFlags = try parseHighlightFlags(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
         try highlightCommand(bundleId: config.bundleId, selector: selector, color: hlFlags.color, duration: hlFlags.duration)
     case "pick":
+        try checkArgs(rest, command: command)
         pickCommand()
     case "identify":
-        var identifyArgs = Array(args.dropFirst())
-        let identifyDuration = try takeOption("--duration", from: &identifyArgs).map { try parseDouble($0, label: "duration") } ?? 3.0
-        let identifyColor = try takeOption("--color", from: &identifyArgs).map(parseColor) ?? .magenta
+        let identifyDuration = try takeOption("--duration", from: &rest).map { try parseDouble($0, label: "duration") } ?? 3.0
+        let identifyColor = try takeOption("--color", from: &rest).map(parseColor) ?? .magenta
+        try checkArgs(rest, command: command)
         let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
         try identifyCommand(bundleId: resolvedBundleId, duration: identifyDuration, color: identifyColor)
     case "border":
-        var (selector, rest) = try resolveSelectorWithFlags(args)
         let borderFlags = try parseBorderFlags(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
         try borderCommand(bundleId: config.bundleId, selector: selector, color: borderFlags.color, width: borderFlags.width)
     case "unborder":
-        if args.count >= 2 || (config.chaining && config.lastSelector != nil) {
-            let (selector, _) = try resolveSelectorWithFlags(args)
-            try unborderCommand(bundleId: config.bundleId, selector: selector)
+        if !rest.isEmpty || (config.chaining && config.lastSelector != nil) {
+            try unborderCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
         } else {
             try unborderCommand(bundleId: config.bundleId)
         }
     case "unborder-all":
+        try checkArgs(rest, command: command)
         unborderAllCommand()
     case "dim":
-        var (selector, rest) = try resolveSelectorWithFlags(args)
         let dimFlags = try parseDimFlags(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
         try dimCommand(bundleId: config.bundleId, selector: selector, opacity: dimFlags.opacity, duration: dimFlags.duration)
     case "undim":
+        try checkArgs(rest, command: command)
         try undimCommand()
     case "preview":
-        var (previewSelector, previewRest) = try resolveSelectorWithFlags(args)
-        let outputPath = try parsePreviewFlags(&previewRest)
-        try previewCommand(bundleId: config.bundleId, selector: previewSelector, outputPath: outputPath)
+        let outputPath = try parsePreviewFlags(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
+        try previewCommand(bundleId: config.bundleId, selector: selector, outputPath: outputPath)
     case "record":
-        var (recordSelector, recordRest) = try resolveSelectorWithFlags(args)
-        let recordFlags = try parseRecordFlags(&recordRest)
-        try recordCommand(bundleId: config.bundleId, selector: recordSelector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
+        let recordFlags = try parseRecordFlags(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
+        try recordCommand(bundleId: config.bundleId, selector: selector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
     case "screens":
+        try checkArgs(rest, command: command)
         screensCommand()
     case "active-screen":
+        try checkArgs(rest, command: command)
         activeScreenCommand()
     case "active-window":
-        let idOnly = args.contains("--id")
+        let idOnly = takeFlag("--id", from: &rest)
+        try checkArgs(rest, command: command)
         try activeWindowCommand(idOnly: idOnly)
     case "shell-init":
-        guard args.count >= 2 else {
+        guard let shell = try checkArgs(rest, command: command, max: 1).first else {
             throw WindowToolError.missingArguments(command: "shell-init")
         }
-        try shellInitCommand(shell: args[1])
+        try shellInitCommand(shell: shell)
     case "commands":
+        try checkArgs(rest, command: command)
         commandsCommand()
-    case "help", "--help", "-h":
-        guard args.count >= 2 else {
+    case "help":
+        guard let name = try checkArgs(rest, command: command, max: 1).first else {
             usage()
             break
         }
-        guard let spec = commandSpec(named: args[1]) else {
-            throw WindowToolError.unknownCommand(args[1])
+        guard let target = commandSpec(named: name) else {
+            throw WindowToolError.unknownCommand(name)
         }
-        print(spec.help)
+        print(target.help)
     default:
+        // A spec with no case here: add the case when adding a command to `commandSpecs`.
         throw WindowToolError.unknownCommand(command)
     }
 }

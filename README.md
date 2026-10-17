@@ -99,6 +99,8 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 
 Options that take a value accept both `--flag value` and `--flag=value` (`--size 800` or `--size=800`, `--app Safari` or `--app=Safari`).
 
+A command's options can come before or after its arguments. An option the command does not take, a repeated option, or an extra argument is an error, and the command fails before touching any window: `Unknown option '--foo' for 'center'. Run 'window-tool center --help'.` Negative numbers such as `-100` are arguments, not options.
+
 ### Command chaining
 
 Use `+` to run multiple commands in sequence, sharing `--app` and `--json` flags. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once. Once a command resolves a window, later commands in the chain target it by window ID, so they keep hitting the same window even after `focus` reorders the window list. In a chain, `move`, `resize`, `snap`, `move-to-screen` and `shake` read bare numbers that fit their own arguments as arguments, not as a window index (`+ shake 20`, `+ move 100 200 800 600`); use `id=` or `title=` to name a different window:
