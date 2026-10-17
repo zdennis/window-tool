@@ -44,7 +44,7 @@ If pushing a window would move it partially off-screen, its width or height is r
 
 ### Unpush behavior
 
-`--unpush` reads the snapshot saved by `--push` (`window-tool-sidebar-snapshot.json` in `$TMPDIR`) and restores every window to its original position and size. The snapshot is then deleted. If no snapshot exists, an error message is printed and the command exits with code 1.
+`--unpush` reads the snapshot saved by `--push` (`window-tool-sidebar-snapshot.json` in your per-user temporary directory, `$TMPDIR`) and restores every window to its original position and size. The snapshot is then deleted. If no snapshot exists, an error message is printed and the command exits with code 1.
 
 The snapshot covers windows from all applications, not just the `--app` target.
 

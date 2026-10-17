@@ -83,7 +83,7 @@ enum WindowToolError: LocalizedError {
             return "Application not found: \(id)"
         case .ambiguousApp(let query, let matches):
             let list = matches.map { "  \($0.name) (\($0.bundleId))" }.joined(separator: "\n")
-            return "Multiple apps match '\(query)':\n\(list)\nUse a more specific name or the full bundle ID."
+            return "Multiple apps match '\(query)':\n\(list)\nUse a more specific name or the full bundle ID shown above."
         case .windowIndexOutOfRange(let index, let count):
             return "Window index \(index) out of range\(count == 0 ? " (no windows)" : " (0..\(count - 1))")"
         case .noWindowMatchingTitle(let pattern):
@@ -651,7 +651,7 @@ func resolveAllWindows(bundleId: String, selector: WindowSelector) throws -> [Wi
 
 // MARK: - Screen Helpers
 
-/// Converts a Cocoa (bottom-left origin) rect to AX global coordinates (top-left origin at the primary display).
+/// Converts a Cocoa (bottom-left origin) rect to AX global coordinates (top-left origin at the primary display, `NSScreen.screens[0]`).
 func cocoaToAX(rect: NSRect) -> NSRect {
     NSRect(x: rect.origin.x, y: NSScreen.screens[0].frame.height - rect.maxY, width: rect.width, height: rect.height)
 }
@@ -909,6 +909,7 @@ func focusCommand(bundleId: String, selector: WindowSelector) throws {
 /// Activates the application that owns the window, which may differ from `--app` when an `id=` selector resolved cross-app.
 func activateOwner(of window: WindowInfo) {
     var pid: pid_t = 0
+    // Best-effort: if the PID can't be read the window is still acted on; it just isn't brought to the front.
     guard AXUIElementGetPid(window.element, &pid) == .success else { return }
     NSRunningApplication(processIdentifier: pid)?.activate()
 }
@@ -1335,7 +1336,9 @@ func unborderCommand(bundleId: String, selector: WindowSelector? = nil) throws {
     }
 
     // Borders are filed under the owning app (see borderOwnerDir), so --app must name the owner here.
-    guard !bundleId.isEmpty else { throw WindowToolError.appRequired }
+    guard !bundleId.isEmpty else {
+        throw WindowToolError.operationFailed("--app is required for this command (or use 'unborder-all' to remove every border)")
+    }
     let appDir = "\(borderPidDir)/\(bundleId)"
     guard let files = try? FileManager.default.contentsOfDirectory(atPath: appDir) else {
         return
@@ -1345,6 +1348,8 @@ func unborderCommand(bundleId: String, selector: WindowSelector? = nil) throws {
         if let pid = readPID(at: pidFile) {
             terminateOverlay(pid: pid)
         }
+        // Remove unconditionally: terminateOverlay only signals window-tool processes, so a PID file left
+        // behind by a dead or foreign process is stale and must not linger.
         try? FileManager.default.removeItem(atPath: pidFile)
     }
     try? FileManager.default.removeItem(atPath: appDir)
