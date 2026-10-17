@@ -469,15 +469,12 @@ func resolveSelector(_ args: [String], at index: Int = 1) throws -> WindowSelect
 }
 
 /// Resolves a window selector and returns the remaining args after the selector.
-/// For commands with positional args: if the full arg count is present, parses the selector from
-/// position 1 and returns remaining args starting at position 2. Otherwise, falls back to the
-/// inherited selector and returns args starting at position 1.
-func resolveSelectorAndArgs(_ args: [String], minArgs: Int) throws -> (selector: WindowSelector, rest: [String]) {
-    if args.count >= minArgs + 1 {
-        let selector = try resolveSelector(args)
-        return (selector, Array(args.dropFirst(2)))
-    }
-    if config.chaining, let last = config.lastSelector, args.count >= minArgs {
+/// `argCounts` lists how many positional args the command accepts after its selector. When chaining,
+/// args whose count matches one of those inherit the previous selector, so `+ move 100 200 800 600`
+/// moves the inherited window instead of reading 100 as an index. An `id=` or `title=` arg is always a selector.
+func resolveSelectorAndArgs(_ args: [String], argCounts: [Int]) throws -> (selector: WindowSelector, rest: [String]) {
+    let namesWindow = args.count >= 2 && (args[1].hasPrefix("id=") || args[1].hasPrefix("title="))
+    if config.chaining, let last = config.lastSelector, !namesWindow, argCounts.contains(args.count - 1) {
         return (last, Array(args.dropFirst()))
     }
     return (try resolveSelector(args), Array(args.dropFirst(2)))
@@ -2522,7 +2519,9 @@ func usage() {
 
     Command chaining:
       Use + to run multiple commands in sequence, sharing --app and --json flags.
-      Subsequent commands inherit the window selector from the previous command:
+      Subsequent commands inherit the window selector from the previous command.
+      Bare numbers that fit a command's arguments are arguments (+ shake 20);
+      use id= or title= to name another window:
       window-tool --app Safari snap 0 center + focus + highlight --color red
       window-tool --app iTerm info 0 + info 1
       window-tool focus id=2457 + highlight + dim id=2789
@@ -2666,7 +2665,7 @@ func runCommand(_ args: [String]) throws {
     case "count":
         try countCommand(bundleId: config.bundleId)
     case "move":
-        let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 3)
+        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [2, 4])
         guard rest.count >= 2 else {
             throw WindowToolError.missingArguments(usage: "window-tool move <window> <x> <y> [<width> <height>]")
         }
@@ -2680,7 +2679,7 @@ func runCommand(_ args: [String]) throws {
         }
         try moveCommand(bundleId: config.bundleId, selector: selector, x: x, y: y, width: width, height: height)
     case "resize":
-        let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 3)
+        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [2])
         guard rest.count >= 2 else {
             throw WindowToolError.missingArguments(usage: "window-tool resize <window> <width> <height>")
         }
@@ -2688,7 +2687,7 @@ func runCommand(_ args: [String]) throws {
         let height = CGFloat(try parseDouble(rest[1], label: "height"))
         try resizeCommand(bundleId: config.bundleId, selector: selector, width: width, height: height)
     case "snap":
-        let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 2)
+        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [1])
         guard let posStr = rest.first else {
             throw WindowToolError.missingArguments(usage: "window-tool snap <window> <position>\nPositions: \(SnapPosition.allNames)")
         }
@@ -2723,7 +2722,7 @@ func runCommand(_ args: [String]) throws {
             try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
         }
     case "move-to-screen":
-        let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 2)
+        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [1])
         guard let screenArg = rest.first else {
             throw WindowToolError.missingArguments(usage: "window-tool move-to-screen <window> <screen>")
         }
@@ -2757,7 +2756,7 @@ func runCommand(_ args: [String]) throws {
     case "unfullscreen":
         try unfullscreenCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
     case "shake":
-        let (selector, rest) = try resolveSelectorWithFlags(args)
+        let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [0, 1, 2, 3])
         let offset = rest.count >= 1 ? try parseInt(rest[0], label: "offset") : 12
         let count = rest.count >= 2 ? try parseInt(rest[1], label: "count") : 6
         let delay = rest.count >= 3 ? try parseDouble(rest[2], label: "delay") : 0.04

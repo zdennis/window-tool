@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] shake <window> [offset] [count] [delay]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command; in a chain, bare numbers are read as `[offset] [count] [delay]` unless four are given, so name another window with `id=` or `title=`. |
 | `[offset]` | No | Shake distance in pixels (default: 12) |
 | `[count]` | No | Number of shakes (default: 6) |
 | `[delay]` | No | Delay between movements in seconds (default: 0.04) |
@@ -30,4 +30,7 @@ window-tool shake title="Alert" 15
 
 # Chaining: shake inherits the selector from focus
 window-tool focus 0 + shake
+
+# Chaining: bare numbers are shake arguments, so this shakes window 0 by 20px
+window-tool focus 0 + shake 20
 ```

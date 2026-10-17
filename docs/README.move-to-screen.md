@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] move-to-screen <window> <screen>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command; in a chain, a lone number is read as `<screen>`. |
 | `<screen>` | Yes | Target screen index (from `screens`) |
 
 ## Details

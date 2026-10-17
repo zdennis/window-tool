@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] move <window> <x> <y> [<width> <height>]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command; in a chain, two or four numbers are read as `<x> <y> [<width> <height>]`. |
 | `<x>` | Yes | Target x position |
 | `<y>` | Yes | Target y position |
 | `<width>` | No | New width (must be paired with height) |
@@ -32,4 +32,5 @@ window-tool move id=1341 100 50
 
 # Chaining: move inherits the selector from focus
 window-tool focus 0 + move 100 50
+window-tool focus 0 + move 100 50 1200 900
 ```
