@@ -1106,8 +1106,10 @@ let listFieldNames = ["app", "bundle_id", "index", "parent_index", "window_id", 
 /// matched on the display holding the window's center), `visibleOnly` (on the current Space and not minimized) and
 /// `excludeMinimized`. `sort` is `app` (the default), `title` or `id`.
 /// `idsOnly` prints just the window IDs; `fields` (keys of the JSON schema, see `listFieldNames`) limits the output to those keys.
+/// Windows with no title and no window ID are left out unless `includeAll`.
 func listCommand(bundleId: String?, titleGlob: String? = nil, screen: String? = nil, visibleOnly: Bool = false,
-                 excludeMinimized: Bool = false, sort: String = "app", idsOnly: Bool = false, fields: [String]? = nil) throws {
+                 excludeMinimized: Bool = false, sort: String = "app", idsOnly: Bool = false, fields: [String]? = nil,
+                 includeAll: Bool = false) throws {
     struct WindowEntry {
         let app: String
         let bundleId: String
@@ -1154,6 +1156,10 @@ func listCommand(bundleId: String?, titleGlob: String? = nil, screen: String? = 
         if let number = entry[kCGWindowNumber] as? CGWindowID { cgByID[number] = entry }
     }
 
+    if !includeAll {
+        // Untitled windows without a window ID (such as Finder's desktop window) cannot be targeted by `id=` or `title=`.
+        entries = entries.filter { !($0.window.title.isEmpty && $0.window.windowID == nil) }
+    }
     if let glob = titleGlob {
         entries = entries.filter { fnmatch(glob, $0.window.title, FNM_CASEFOLD) == 0 }
     }
@@ -2955,6 +2961,7 @@ let commandSpecs: [CommandSpec] = [
                         ("--visible", "Only windows that are on screen (not minimized, on the current Space)"),
                         ("--no-minimized", "Leave out minimized windows"),
                         ("--sort <key>", "Order by app (default), title or id"),
+                        ("--all", "Include untitled windows that have no window ID (hidden by default; indexes count them either way)"),
                         ("--ids", "Print only window IDs, one per line (--json: an array of numbers)"),
                         ("--fields <a,b,c>", "Print only these fields (the --json keys, 'id' for window_id): tab-separated with a header, or --json objects")],
                 resolvesOwnApp: true),
@@ -3319,6 +3326,7 @@ func runCommand(_ args: [String]) throws {
         guard ["app", "title", "id"].contains(sort) else {
             throw WindowToolError.unknownChoice(kind: "sort key", value: sort, choices: ["app", "title", "id"])
         }
+        let includeAll = takeFlag("--all", from: &rest)
         let idsOnly = takeFlag("--ids", from: &rest)
         let fieldsArg = try takeOption("--fields", from: &rest)
         var fields: [String]?
@@ -3334,7 +3342,7 @@ func runCommand(_ args: [String]) throws {
         try checkArgs(rest, command: command)
         let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
         try listCommand(bundleId: resolvedBundleId, titleGlob: titleGlob, screen: screen, visibleOnly: visibleOnly,
-                        excludeMinimized: excludeMinimized, sort: sort, idsOnly: idsOnly, fields: fields)
+                        excludeMinimized: excludeMinimized, sort: sort, idsOnly: idsOnly, fields: fields, includeAll: includeAll)
     case "info":
         try infoCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "columnize":

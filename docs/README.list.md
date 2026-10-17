@@ -8,6 +8,7 @@ List windows with their app, index, position, size, and title.
 window-tool list
 window-tool --app <name-or-id> list
 window-tool list [--title <glob>] [--screen <screen>] [--visible] [--no-minimized] [--sort app|title|id]
+window-tool list --all
 window-tool list --ids
 window-tool list --fields <a,b,c>
 ```
@@ -19,6 +20,8 @@ Without `--app`, lists all windows across all running applications, sorted by ap
 Text output columns (tab-separated): APP, BUNDLE_ID, INDEX, WID, POSITION, SIZE, TITLE. With `--json`, outputs a JSON array of windows in the `info` schema (bundle_id, index or parent_index, window_id, title, x, y, width, height, minimized, fullscreen, focused, main, modal, role, subrole, document) plus `app`, `pid`, `screen`, `on_screen` and `layer`. `screen` is the index of the display (as in `screens`) containing the window's center, left out when the window is off every display. `on_screen` is false for minimized windows and windows on other Spaces. `layer` is the window level (0 for normal windows). `window_id`, `pid`, `screen`, `on_screen` and `layer` are left out when unknown, so use `// empty` or `.field? // null` in `jq`. The text output is unchanged and has no state columns; use `--json` to filter on them.
 
 ## Filters and sorting
+
+Windows with no title and no window ID (for example Finder's fullscreen desktop window, shown as `WID ?`) are left out by default because no selector can target them. `--all` includes them. They still occupy an index, so indexes in the output can skip numbers. Prefer `id=` over indexes in scripts, since indexes shift as windows open, close or minimize.
 
 Filters combine with AND and apply to text and `--json` output alike. An empty result prints just the header (or `[]`).
 
