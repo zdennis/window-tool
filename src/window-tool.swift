@@ -19,6 +19,15 @@ struct Config {
 
 var config = Config()
 
+/// Prints a human-readable status line; under `--json` it goes to stderr so stdout stays valid JSON.
+func printStatus(_ message: String) {
+    if config.jsonOutput {
+        fputs(message + "\n", stderr)
+    } else {
+        print(message)
+    }
+}
+
 func printJSON(_ value: Any) {
     if config.jsonChaining {
         config.jsonBuffer.append(value)
@@ -844,7 +853,7 @@ func moveCommand(bundleId: String, selector: WindowSelector, x: CGFloat, y: CGFl
         }
     }
     if case .byTitle(let pattern) = selector {
-        print("Moved \(windows.count) window(s) matching '\(pattern)'")
+        printStatus("Moved \(windows.count) window(s) matching '\(pattern)'")
     }
 }
 
@@ -1300,7 +1309,7 @@ func resizeCommand(bundleId: String, selector: WindowSelector, width: CGFloat, h
         resizeWindow(window.element, width: width, height: height)
     }
     if case .byTitle(let pattern) = selector {
-        print("Resized \(windows.count) window(s) matching '\(pattern)'")
+        printStatus("Resized \(windows.count) window(s) matching '\(pattern)'")
     }
 }
 
@@ -1380,7 +1389,7 @@ func maximizeCommand(bundleId: String, selector: WindowSelector) throws {
         resizeWindow(window.element, width: bounds.width, height: bounds.height)
     }
     if case .byTitle(let pattern) = selector {
-        print("Maximized \(windows.count) window(s) matching '\(pattern)'")
+        printStatus("Maximized \(windows.count) window(s) matching '\(pattern)'")
     }
 }
 
@@ -1534,7 +1543,7 @@ func sidebarUnpushCommand() throws {
     }
 
     try FileManager.default.removeItem(atPath: sidebarSnapshotFile)
-    print("Restored \(restored) window(s)")
+    printStatus("Restored \(restored) window(s)")
 }
 
 /// Enters macOS fullscreen mode for a window.
@@ -1582,7 +1591,7 @@ func restoreCommand(bundleId: String) throws {
             restored += 1
         }
     }
-    print("Restored \(restored) window(s)")
+    printStatus("Restored \(restored) window(s)")
 }
 
 /// Reads an AX boolean attribute, returning false if unavailable.
@@ -2211,7 +2220,7 @@ func saveLayoutCommand(bundleId: String, filePath: String) throws {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(layout)
     try data.write(to: URL(fileURLWithPath: filePath))
-    print("Saved \(windows.count) window(s) to \(filePath)")
+    printStatus("Saved \(windows.count) window(s) to \(filePath)")
 }
 
 /// Restores window positions and sizes from a previously saved layout file.
@@ -2229,7 +2238,7 @@ func restoreLayoutCommand(filePath: String) throws {
             restored += 1
         }
     }
-    print("Restored \(restored)/\(layout.windows.count) window(s) for \(layout.bundleId)")
+    printStatus("Restored \(restored)/\(layout.windows.count) window(s) for \(layout.bundleId)")
 }
 
 /// Cascades all windows for an application, offsetting each by a fixed amount.
@@ -2242,7 +2251,7 @@ func stackCommand(bundleId: String, offsetStep: Int) throws {
         let offset = CGFloat(i * offsetStep)
         moveWindow(w.element, x: s.x + offset, y: s.y + offset)
     }
-    print("Stacked \(windows.count) window(s)")
+    printStatus("Stacked \(windows.count) window(s)")
 }
 
 /// Watches for window changes and prints updates.
@@ -2320,7 +2329,7 @@ func columnizeCommand(bundleId: String, selectors: [WindowSelector], gap: Int) t
         AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
         AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
     }
-    print("Arranged \(selected.count) window(s) in columns")
+    printStatus("Arranged \(selected.count) window(s) in columns")
 }
 
 func calculateGrid(windowCount: Int, colsOverride: Int?) -> (rows: Int, cols: Int) {
@@ -2383,7 +2392,7 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
         resizeWindow(window.element, width: cellWidth, height: cellHeight)
         moveWindow(window.element, x: x, y: y)
     }
-    print("Tiled \(windows.count) window(s) in \(rows)x\(cols) grid")
+    printStatus("Tiled \(windows.count) window(s) in \(rows)x\(cols) grid")
 }
 
 /// Restores windows to their pre-tile positions from the snapshot file.
@@ -2407,7 +2416,7 @@ func untileCommand() throws {
     }
 
     try FileManager.default.removeItem(atPath: tileSnapshotFile)
-    print("Restored \(restored) window(s)")
+    printStatus("Restored \(restored) window(s)")
 }
 
 /// Prints the number of windows for the given application. Prints "0" if the app is not found.
