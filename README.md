@@ -80,7 +80,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `shell-init` | [README](docs/README.shell-init.md) | Print shell integration snippet |
 | `sidebar` | [README](docs/README.sidebar.md) | Pin a window to screen edge as a sidebar |
 | `snap` | [README](docs/README.snap.md) | Snap a window to a screen region |
-| `stack` | [README](docs/README.stack.md) | Cascade windows with offset |
+| `stack` | [README](docs/README.stack.md) | Cascade all or selected windows with an offset |
 | `tile` | [README](docs/README.tile.md) | Tile windows in a grid layout |
 | `unborder` | [README](docs/README.unborder.md) | Remove border overlays for an app |
 | `unborder-all` | [README](docs/README.unborder-all.md) | Remove all active borders |

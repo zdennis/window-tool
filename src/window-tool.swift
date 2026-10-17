@@ -2274,9 +2274,16 @@ func restoreLayoutCommand(filePath: String) throws {
 }
 
 /// Cascades all windows for an application, offsetting each by a fixed amount.
-func stackCommand(bundleId: String, offsetStep: Int) throws {
+func stackCommand(bundleId: String, selectors: [WindowSelector]?, offsetStep: Int) throws {
     let app = try requireApp(bundleId)
-    let windows = getWindows(appElement: app)
+    var windows: [WindowInfo] = []
+    if let selectors = selectors {
+        for selector in selectors {
+            windows.append(try resolveWindow(bundleId: bundleId, selector: selector))
+        }
+    } else {
+        windows = getWindows(appElement: app)
+    }
     if windows.isEmpty { return }
     let s = screenBoundsForWindow(windows[0])
     for (i, w) in windows.enumerated() {
@@ -2556,9 +2563,10 @@ let commandSpecs: [CommandSpec] = [
                 summary: "List all displays with bounds", needsAccessibility: false),
     CommandSpec(name: "pick", group: .query, app: .none, mutates: false,
                 summary: "Click a window to print its ID (blocks until you click)", needsAccessibility: false),
-    CommandSpec(name: "watch", group: .query, app: .required, mutates: false, synopsis: "[interval]",
+    CommandSpec(name: "watch", group: .query, app: .required, mutates: false, synopsis: "[--interval <seconds>]",
                 summary: "Print window changes for --app until interrupted",
-                arguments: [("[interval]", "Poll interval in seconds, greater than 0 (default: 1.0)")]),
+                arguments: [("[interval]", "Legacy form of --interval")],
+                flags: [("--interval <seconds>", "Poll interval, greater than 0 (default: 1.0)")]),
 
     CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position>",
                 summary: "Snap a window to a screen region",
@@ -2597,9 +2605,11 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "columnize", group: .layout, app: .optional, mutates: true, synopsis: "<window> <window> [<window>...]",
                 summary: "Arrange windows side by side in columns",
                 flags: [("--gap N", "Gap between columns in pixels (default: 10)")]),
-    CommandSpec(name: "stack", group: .layout, app: .required, mutates: true, synopsis: "[offset]",
-                summary: "Cascade the windows for --app",
-                arguments: [("[offset]", "Pixels between each window (default: 30)")]),
+    CommandSpec(name: "stack", group: .layout, app: .required, mutates: true, synopsis: "[<window>...] [--offset N]",
+                summary: "Cascade the windows for --app, or just the ones named",
+                arguments: [("[<window>...]", "Window selectors to cascade (default: all windows)"),
+                            ("[offset]", "Legacy form of --offset: a lone bare number with no --offset")],
+                flags: [("--offset N", "Pixels between each window (default: 30)")]),
     CommandSpec(name: "sidebar", group: .layout, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Pin a window to an edge of its screen",
                 flags: [("--side left|right|top|bottom", "Edge to pin to (default: left)"),
@@ -2639,11 +2649,12 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Label visible windows with their IDs (blocks until they dismiss)",
                 flags: [("--color <color>", "Label color (default: magenta)"),
                         ("--duration <seconds>", "How long to show the labels (default: 3)")], resolvesOwnApp: true),
-    CommandSpec(name: "shake", group: .overlays, app: .optional, mutates: true, synopsis: "<window> [offset] [count] [delay]",
+    CommandSpec(name: "shake", group: .overlays, app: .optional, mutates: true, synopsis: "<window> [--offset N] [--count N] [--delay <seconds>]",
                 summary: "Shake a window to draw attention to it",
-                arguments: [("[offset]", "Shake distance in pixels (default: 12)"),
-                            ("[count]", "Number of shakes, greater than 0 (default: 6)"),
-                            ("[delay]", "Seconds between movements (default: 0.04)")]),
+                arguments: [("[offset] [count] [delay]", "Legacy forms of the options, in that order; not combined with them")],
+                flags: [("--offset N", "Shake distance in pixels (default: 12)"),
+                        ("--count N", "Number of shakes, greater than 0 (default: 6)"),
+                        ("--delay <seconds>", "Seconds between movements (default: 0.04)")]),
 
     CommandSpec(name: "preview", group: .capture, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Save a screenshot of a window as PNG",
@@ -2932,10 +2943,19 @@ func runCommand(_ args: [String]) throws {
         }
         try restoreLayoutCommand(filePath: filePath)
     case "stack":
-        let offset = try checkArgs(rest, command: command, max: 1).first.map { try parseInt($0, label: "offset") } ?? 30
-        try stackCommand(bundleId: config.bundleId, offsetStep: offset)
+        var offset = try takeOption("--offset", from: &rest).map { try parseInt($0, label: "offset") }
+        try rejectUnknownOptions(rest, command: command)
+        // Without --offset, a lone bare number is the legacy [offset]; anything else is a list of selectors.
+        if offset == nil, rest.count == 1, let legacy = Int(rest[0]) {
+            offset = legacy
+            rest = []
+        }
+        let selectors: [WindowSelector]? = rest.isEmpty ? nil : try rest.map { try parseWindowSelector($0) }
+        try stackCommand(bundleId: config.bundleId, selectors: selectors, offsetStep: offset ?? 30)
     case "watch":
-        let interval = try checkArgs(rest, command: command, max: 1).first.map { try parsePositiveDouble($0, label: "interval") } ?? 1.0
+        let namedInterval = try takeOption("--interval", from: &rest)
+        let positionalInterval = try checkArgs(rest, command: command, max: namedInterval == nil ? 1 : 0).first
+        let interval = try (namedInterval ?? positionalInterval).map { try parsePositiveDouble($0, label: "interval") } ?? 1.0
         try watchCommand(bundleId: config.bundleId, interval: interval)
     case "focus":
         try focusCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
@@ -2944,10 +2964,18 @@ func runCommand(_ args: [String]) throws {
     case "unfullscreen":
         try unfullscreenCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "shake":
-        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [0, 1, 2, 3])
-        let offset = values.count >= 1 ? try parseInt(values[0], label: "offset") : 12
-        let count = values.count >= 2 ? try parsePositiveInt(values[1], label: "count") : 6
-        let delay = values.count >= 3 ? try parseDouble(values[2], label: "delay") : 0.04
+        let namedOffset = try takeOption("--offset", from: &rest)
+        let namedCount = try takeOption("--count", from: &rest)
+        let namedDelay = try takeOption("--delay", from: &rest)
+        // With any named option, bare numbers are only the window selector, never legacy [offset] [count] [delay].
+        let named = namedOffset != nil || namedCount != nil || namedDelay != nil
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: named ? [0] : [0, 1, 2, 3])
+        let legacyOffset = values.first
+        let legacyCount = values.count >= 2 ? values[1] : nil
+        let legacyDelay = values.count >= 3 ? values[2] : nil
+        let offset = try (namedOffset ?? legacyOffset).map { try parseInt($0, label: "offset") } ?? 12
+        let count = try (namedCount ?? legacyCount).map { try parsePositiveInt($0, label: "count") } ?? 6
+        let delay = try (namedDelay ?? legacyDelay).map { try parseDouble($0, label: "delay") } ?? 0.04
         try shakeCommand(bundleId: config.bundleId, selector: selector, offset: offset, count: count, delay: delay)
     case "flash":
         let flags = try parseFlashFlags(&rest)
