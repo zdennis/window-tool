@@ -54,6 +54,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `active-window` | [README](docs/README.active-window.md) | Print info about the frontmost window |
 | `border` | [README](docs/README.border.md) | Add a persistent border that tracks a window |
 | `center` | [README](docs/README.center.md) | Center a window on screen, optionally resizing |
+| `close` | [README](docs/README.close.md) | Close a window, or every window of an app |
 | `columnize` | [README](docs/README.columnize.md) | Arrange windows side-by-side in columns |
 | `commands` | [README](docs/README.commands.md) | List every command; with `--json`, its arguments, options and whether it mutates |
 | `count` | [README](docs/README.count.md) | Print number of windows |
@@ -166,12 +167,13 @@ $ window-tool --json --app Finder info 99
 | 3 | `--app` matched no running app, or more than one | `app_not_found`, `ambiguous_app` |
 | 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
+| 6 | `close` was blocked by an unsaved-changes prompt | `unsaved_changes` |
 
 New error codes may be added; match on the exit code for the category and on `code` for the specific case.
 
 ### Mutating command results
 
-With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed (`restore` with no minimized windows, `restore-layout` with no matching windows). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`, with `window_id` and `bundle_id` on each window; `watch` and `list` windows carry both too.
+With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `close`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed or the windows are gone (`close`; `restore` with no minimized windows, `restore-layout` with no matching windows). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`, with `window_id` and `bundle_id` on each window; `watch` and `list` windows carry both too.
 
 After a move or resize, window-tool re-reads the frame. When a set call failed, or the frame differs from the request by more than 2 points (a window with a minimum size, a fullscreen window), stderr gets `Warning: '<title>': size requested 400x300 but is 600x400`, the same message goes in `warnings`, and the exit code stays 0.
 

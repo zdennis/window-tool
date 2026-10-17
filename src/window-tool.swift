@@ -94,6 +94,8 @@ enum WindowToolError: LocalizedError {
     case screenIndexOutOfRange(index: Int, count: Int)
     case noWindows
     case noPickableWindow
+    /// A window answered the close with a sheet (such as "Do you want to save changes?") instead of closing.
+    case unsavedChanges(windows: [(windowID: CGWindowID?, title: String)])
     case accessibilityNotEnabled
     case screenRecordingNotEnabled
     case invalidValue(name: String, expected: String, got: String)
@@ -136,6 +138,8 @@ enum WindowToolError: LocalizedError {
             return "No windows found"
         case .noPickableWindow:
             return "No pickable window at click location (menu bar, Dock and status items are skipped)"
+        case .unsavedChanges(let windows):
+            return "Not closed, the window is asking about unsaved changes: \(windows.map { "'\($0.title)'" }.joined(separator: ", ")). Answer the prompt in the app, then run close again."
         case .accessibilityNotEnabled:
             return "Accessibility access is not enabled.\nGrant access in System Settings > Privacy & Security > Accessibility.\nAdd this terminal app or the window-tool binary."
         case .screenRecordingNotEnabled:
@@ -187,6 +191,7 @@ enum WindowToolError: LocalizedError {
         case .screenIndexOutOfRange: return "screen_index_out_of_range"
         case .noWindows: return "no_windows"
         case .noPickableWindow: return "no_pickable_window"
+        case .unsavedChanges: return "unsaved_changes"
         case .accessibilityNotEnabled: return "accessibility_not_enabled"
         case .screenRecordingNotEnabled: return "screen_recording_not_enabled"
         case .invalidValue: return "invalid_value"
@@ -232,6 +237,8 @@ enum WindowToolError: LocalizedError {
             return ["command": command]
         case .fileNotFound(let path):
             return ["path": path]
+        case .unsavedChanges(let windows):
+            return ["windows": windows.map { ["window_id": $0.windowID.map { Int($0) } ?? NSNull(), "title": $0.title] as [String: Any] }]
         case .unknownOption(let option, let command), .repeatedOption(let option, let command), .optionTakesNoValue(let option, let command):
             return ["option": option, "command": command]
         case .unexpectedArgument(let argument, let command):
@@ -245,7 +252,7 @@ enum WindowToolError: LocalizedError {
         }
     }
 
-    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 1 anything else.
+    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 6 unsaved changes blocked a close, 1 anything else.
     var exitCode: Int32 {
         switch self {
         case .invalidValue, .unknownChoice, .optionRequired, .appRequired, .missingWindowSelector, .unknownOption,
@@ -258,6 +265,8 @@ enum WindowToolError: LocalizedError {
             return 4
         case .accessibilityNotEnabled, .screenRecordingNotEnabled:
             return 5
+        case .unsavedChanges:
+            return 6
         case .nothingToUndo, .fileNotFound, .operationFailed:
             return 1
         }
@@ -1969,6 +1978,62 @@ func minimizeCommand(bundleId: String, selector: WindowSelector) throws {
     recordAffectedWindow(window.element)
 }
 
+/// Presses the close button of `windows` and waits for them to go. Throws `unsavedChanges` when a window answers with a
+/// sheet and `operationFailed` when a window has no close button or is still open after the wait.
+func closeWindows(_ windows: [WindowInfo]) throws {
+    var pending: [WindowInfo] = []
+    var failures: [String] = []
+    for window in windows {
+        var buttonRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window.element, kAXCloseButtonAttribute as CFString, &buttonRef) == .success,
+              let button = buttonRef,
+              AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString) == .success else {
+            failures.append("'\(window.title)' has no close button that can be pressed")
+            continue
+        }
+        pending.append(window)
+    }
+    func isGone(_ window: WindowInfo) -> Bool {
+        var pid: pid_t = 0
+        // Gone once its attributes cannot be read or its app no longer lists it.
+        guard currentFrame(of: window.element) != nil, AXUIElementGetPid(window.element, &pid) == .success else { return true }
+        return !getWindows(appElement: AXUIElementCreateApplication(pid)).contains { CFEqual($0.element, window.element) }
+    }
+    func hasSheet(_ window: WindowInfo) -> Bool {
+        var childrenRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(window.element, kAXChildrenAttribute as CFString, &childrenRef)
+        let children = childrenRef as? [AXUIElement] ?? []
+        return children.contains { axString($0, kAXRoleAttribute as String) == kAXSheetRole as String }
+    }
+    // A window with unsaved changes stays open behind a sheet, so stop waiting for it as soon as the sheet shows.
+    let deadline = Date().addingTimeInterval(2)
+    var unsaved: [WindowInfo] = []
+    while !pending.isEmpty {
+        pending.removeAll { isGone($0) }
+        let blocked = pending.filter { hasSheet($0) }
+        unsaved += blocked
+        pending.removeAll { w in blocked.contains { $0.id == w.id } }
+        if pending.isEmpty || Date() >= deadline { break }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    if !unsaved.isEmpty { throw WindowToolError.unsavedChanges(windows: unsaved.map { ($0.windowID, $0.title) }) }
+    failures += pending.map { "'\($0.title)' is still open after pressing its close button" }
+    if !failures.isEmpty { throw WindowToolError.operationFailed("Not closed: " + failures.joined(separator: "; ")) }
+}
+
+/// Closes the selected window, or with no selector every window of the application, and succeeds only once they are gone.
+func closeCommand(bundleId: String, selector: WindowSelector?) throws {
+    let windows: [WindowInfo]
+    if let selector {
+        windows = [try resolveWindow(bundleId: bundleId, selector: selector)]
+    } else {
+        windows = getWindows(appElement: try requireApp(bundleId))
+        guard !windows.isEmpty else { throw WindowToolError.noWindows }
+    }
+    try closeWindows(windows)
+    printStatus("Closed \(windows.count) window(s)")
+}
+
 /// Restores (unminimizes) the selected window, or every minimized window of the application when no selector is given.
 func restoreCommand(bundleId: String, selector: WindowSelector?) throws {
     let windows: [AXUIElement]
@@ -3005,6 +3070,9 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Bring a window to the front"),
     CommandSpec(name: "minimize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Minimize a window"),
+    CommandSpec(name: "close", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> | --all",
+                summary: "Close a window, or every window of --app with --all",
+                flags: [("--all", "Close every window of --app instead of one window")]),
     CommandSpec(name: "restore", group: .moveSize, app: .optional, mutates: true, synopsis: "[<window>]",
                 summary: "Restore minimized windows: all for --app, or just <window>"),
     CommandSpec(name: "fullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
@@ -3198,7 +3266,8 @@ func usage() {
       With --json, an error also prints {"error": {"code", "message", "details"}}
       to stdout (in a chain, the failed command's "error"). Exit codes: 0 success,
       1 other failure, 2 usage error, 3 app not found or ambiguous, 4 window not
-      found, 5 permission not granted (Accessibility, or Screen Recording for record).
+      found, 5 permission not granted (Accessibility, or Screen Recording for record),
+      6 close blocked by an unsaved-changes prompt.
 
     Warnings:
       After a move or resize, the window's frame is re-read. If a set call failed or
@@ -3420,6 +3489,14 @@ func runCommand(_ args: [String]) throws {
         try maximizeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "minimize":
         try minimizeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
+    case "close":
+        if takeFlag("--all", from: &rest) {
+            try checkArgs(rest, command: command)
+            guard !config.bundleId.isEmpty else { throw WindowToolError.appRequired(hint: "close --all closes the windows of one app.") }
+            try closeCommand(bundleId: config.bundleId, selector: nil)
+        } else {
+            try closeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
+        }
     case "restore":
         let selector = rest.isEmpty ? nil : try resolveSelectorAndArgs(rest, command: command).selector
         try restoreCommand(bundleId: config.bundleId, selector: selector)
