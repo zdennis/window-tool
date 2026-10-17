@@ -1096,7 +1096,11 @@ func checkAccessibility() throws {
 
 /// Lists windows. When bundleId is provided, lists windows for that app only.
 /// When nil, lists all windows across all running apps, sorted by app name.
-func listCommand(bundleId: String?) throws {
+/// The filters narrow that list: `titleGlob` (whole title, case-insensitive), `screen` (a `screens` index or name,
+/// matched on the display holding the window's center), `visibleOnly` (on the current Space and not minimized) and
+/// `excludeMinimized`. `sort` is `app` (the default), `title` or `id`.
+func listCommand(bundleId: String?, titleGlob: String? = nil, screen: String? = nil, visibleOnly: Bool = false,
+                 excludeMinimized: Bool = false, sort: String = "app") throws {
     struct WindowEntry {
         let app: String
         let bundleId: String
@@ -1132,20 +1136,51 @@ func listCommand(bundleId: String?) throws {
         entries.sort(by: { $0.app.lowercased() < $1.app.lowercased() })
     }
 
-    if config.jsonOutput {
-        let cgWindows = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[CFString: Any]]) ?? []
-        var cgByID: [CGWindowID: [CFString: Any]] = [:]
-        for entry in cgWindows {
-            if let number = entry[kCGWindowNumber] as? CGWindowID { cgByID[number] = entry }
+    let screenFrames = NSScreen.screens.map { cocoaToAX(rect: $0.frame) }
+    func screenIndex(of w: WindowInfo) -> Int? {
+        let center = CGPoint(x: w.position.x + w.size.width / 2, y: w.position.y + w.size.height / 2)
+        return screenFrames.firstIndex(where: { $0.contains(center) })
+    }
+    let cgWindows = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[CFString: Any]]) ?? []
+    var cgByID: [CGWindowID: [CFString: Any]] = [:]
+    for entry in cgWindows {
+        if let number = entry[kCGWindowNumber] as? CGWindowID { cgByID[number] = entry }
+    }
+
+    if let glob = titleGlob {
+        entries = entries.filter { fnmatch(glob, $0.window.title, FNM_CASEFOLD) == 0 }
+    }
+    if let screen = screen {
+        // Relative names (left, right, next, prev) are relative to the display holding the mouse, as in active-screen.
+        let mouse = NSEvent.mouseLocation
+        let current = NSScreen.screens.firstIndex { $0.frame.contains(mouse) } ?? 0
+        let wanted = try resolveScreenIndex(screen, frames: screenFrames, current: current)
+        entries = entries.filter { screenIndex(of: $0.window) == wanted }
+    }
+    if excludeMinimized || visibleOnly {
+        entries = entries.filter { !axBool($0.window.element, kAXMinimizedAttribute as String) }
+    }
+    if visibleOnly {
+        entries = entries.filter { e in
+            guard let wid = e.window.windowID, let cg = cgByID[wid] else { return false }
+            return cg[kCGWindowIsOnscreen] as? Bool ?? false
         }
-        let screenFrames = NSScreen.screens.map { cocoaToAX(rect: $0.frame) }
+    }
+    switch sort {
+    case "title":
+        entries.sort { $0.window.title.localizedCaseInsensitiveCompare($1.window.title) == .orderedAscending }
+    case "id":
+        entries.sort { ($0.window.windowID ?? .max) < ($1.window.windowID ?? .max) }
+    default: break
+    }
+
+    if config.jsonOutput {
         let items = entries.map { e -> [String: Any] in
             let w = e.window
             var dict = windowInfoJSON(w, bundleId: e.bundleId)
             dict["app"] = e.app
             if let pid = e.pid { dict["pid"] = Int(pid) }
-            let center = CGPoint(x: w.position.x + w.size.width / 2, y: w.position.y + w.size.height / 2)
-            if let screen = screenFrames.firstIndex(where: { $0.contains(center) }) { dict["screen"] = screen }
+            if let screen = screenIndex(of: w) { dict["screen"] = screen }
             if let wid = w.windowID, let cg = cgByID[wid] {
                 dict["on_screen"] = cg[kCGWindowIsOnscreen] as? Bool ?? false
                 if let layer = cg[kCGWindowLayer] as? Int { dict["layer"] = layer }
@@ -2895,7 +2930,13 @@ func helpRows(_ rows: [(name: String, description: String)], width: Int? = nil) 
 /// Each `runCommand` case needs a spec here (a command without one skips the Accessibility check), or `help <command>` and its usage errors cannot find it.
 let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "list", group: .query, app: .optional, mutates: false,
-                summary: "List windows (all apps, or one app with --app)", resolvesOwnApp: true),
+                summary: "List windows (all apps, or one app with --app)",
+                flags: [("--title <glob>", "Only windows whose whole title matches the glob, case-insensitive (use '*PR*' for a substring)"),
+                        ("--screen <screen>", "Only windows on a display: an index from 'screens', or primary, external, left, right, next, prev (relative to the mouse's display)"),
+                        ("--visible", "Only windows that are on screen (not minimized, on the current Space)"),
+                        ("--no-minimized", "Leave out minimized windows"),
+                        ("--sort <key>", "Order by app (default), title or id")],
+                resolvesOwnApp: true),
     CommandSpec(name: "info", group: .query, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Show detailed info for a window"),
     CommandSpec(name: "count", group: .query, app: .required, mutates: false,
@@ -3249,9 +3290,18 @@ func runCommand(_ args: [String]) throws {
 
     switch command {
     case "list":
+        let titleGlob = try takeOption("--title", from: &rest)
+        let screen = try takeOption("--screen", from: &rest)
+        let visibleOnly = takeFlag("--visible", from: &rest)
+        let excludeMinimized = takeFlag("--no-minimized", from: &rest)
+        let sort = try takeOption("--sort", from: &rest) ?? "app"
+        guard ["app", "title", "id"].contains(sort) else {
+            throw WindowToolError.unknownChoice(kind: "sort key", value: sort, choices: ["app", "title", "id"])
+        }
         try checkArgs(rest, command: command)
         let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
-        try listCommand(bundleId: resolvedBundleId)
+        try listCommand(bundleId: resolvedBundleId, titleGlob: titleGlob, screen: screen, visibleOnly: visibleOnly,
+                        excludeMinimized: excludeMinimized, sort: sort)
     case "info":
         try infoCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "columnize":
