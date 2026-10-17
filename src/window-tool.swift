@@ -2215,6 +2215,11 @@ func pickCommand() {
 
     fputs("Click on a window to get its ID...\n", stderr)
 
+    // Only normal, floating and modal-panel windows are real app windows; every other layer
+    // (menu bar, Dock, status items) is skipped because no command can resolve those IDs.
+    let pickableLayers = Set([CGWindowLevelKey.normalWindow, .floatingWindow, .modalPanelWindow]
+        .map { Int(CGWindowLevelForKey($0)) })
+
     NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { _ in
         // NSEvent.mouseLocation gives screen coordinates (bottom-left origin)
         let screenPoint = NSEvent.mouseLocation
@@ -2228,9 +2233,8 @@ func pickCommand() {
         }
 
         // Walk front-to-back, find first window containing the click
-        // Layer 0 = normal windows, layer > 0 = modal/panel windows
         for entry in windowList {
-            guard let layer = entry[kCGWindowLayer] as? Int, layer >= 0,
+            guard let layer = entry[kCGWindowLayer] as? Int, pickableLayers.contains(layer),
                   let bounds = entry[kCGWindowBounds] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"],
                   let w = bounds["Width"], let h = bounds["Height"],
@@ -2248,7 +2252,7 @@ func pickCommand() {
             }
         }
 
-        fputs("No window found at click location\n", stderr)
+        fputs("No pickable window at click location (menu bar, Dock and status items are skipped)\n", stderr)
         flushJSONAndExit(1)
     }
 
