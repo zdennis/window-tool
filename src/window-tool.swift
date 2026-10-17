@@ -43,6 +43,14 @@ func flushJSONBuffer() {
     print(str)
 }
 
+/// Exits without losing JSON results buffered by earlier commands in a chain.
+/// Commands throw WindowToolError; this is for callbacks and signal handlers that can't throw.
+/// Plain exit() is fine before any command runs.
+func flushJSONAndExit(_ status: Int32) -> Never {
+    flushJSONBuffer()
+    exit(status)
+}
+
 // MARK: - Errors
 
 enum WindowToolError: LocalizedError {
@@ -54,6 +62,11 @@ enum WindowToolError: LocalizedError {
     case screenIndexOutOfRange(index: Int, count: Int)
     case accessibilityNotEnabled
     case invalidArgument(value: String, label: String)
+    case appRequired
+    case missingWindowSelector
+    case missingArguments(usage: String)
+    case unknownCommand(String)
+    case operationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -74,6 +87,16 @@ enum WindowToolError: LocalizedError {
             return "Accessibility access is not enabled.\nGrant access in System Settings > Privacy & Security > Accessibility.\nAdd this terminal app or the window-tool binary."
         case .invalidArgument(let value, let label):
             return "'\(value)' is not a valid \(label)"
+        case .appRequired:
+            return "--app is required for this command"
+        case .missingWindowSelector:
+            return "Missing window selector. Use an index (0, 1, ...), id=<N>, or title=<pattern>"
+        case .missingArguments(let usage):
+            return "Missing arguments\nUsage: \(usage)"
+        case .unknownCommand(let command):
+            return "Unknown command: \(command)"
+        case .operationFailed(let message):
+            return message
         }
     }
 }
@@ -421,8 +444,7 @@ func resolveSelector(_ args: [String], at index: Int = 1) throws -> WindowSelect
     if config.chaining, let last = config.lastSelector {
         return last
     }
-    fputs("Error: Missing window selector. Use an index (0, 1, ...), id=<N>, or title=<pattern>\n", stderr)
-    exit(1)
+    throw WindowToolError.missingWindowSelector
 }
 
 /// Resolves a window selector and returns the remaining args after the selector.
@@ -456,8 +478,7 @@ func resolveSelectorWithFlags(_ args: [String]) throws -> (selector: WindowSelec
 
 func requireApp(_ bundleId: String) throws -> AXUIElement {
     guard !bundleId.isEmpty else {
-        fputs("Error: --app is required for this command\n", stderr)
-        exit(1)
+        throw WindowToolError.appRequired
     }
     guard let app = getAppElement(bundleId: bundleId) else {
         throw WindowToolError.appNotFound(bundleId)
@@ -687,7 +708,7 @@ func activeWindowCommand(idOnly: Bool) throws {
     }
 }
 
-func shellInitCommand(shell: String) {
+func shellInitCommand(shell: String) throws {
     let binary = ProcessInfo.processInfo.processName
     switch shell {
     case "zsh":
@@ -709,8 +730,7 @@ func shellInitCommand(shell: String) {
         print("  set -gx WINDOWID (\(binary) active-window --id 2>/dev/null)")
         print("end")
     default:
-        fputs("Unsupported shell: \(shell). Supported: zsh, bash, fish\n", stderr)
-        exit(1)
+        throw WindowToolError.invalidArgument(value: shell, label: "shell (zsh, bash, fish)")
     }
 }
 
@@ -1089,7 +1109,7 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
 
     let cleanupPID: @convention(c) (Int32) -> Void = { _ in
         try? FileManager.default.removeItem(atPath: dimPIDFile)
-        exit(0)
+        flushJSONAndExit(0)
     }
     signal(SIGTERM, cleanupPID)
     signal(SIGINT, cleanupPID)
@@ -1143,8 +1163,7 @@ class BorderView: NSView {
 func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, width: CGFloat) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     guard let windowID = window.windowID else {
-        fputs("Error: Could not determine window ID\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("Could not determine window ID")
     }
 
     let appBundleDir = "\(borderPidDir)/\(bundleId)"
@@ -1405,8 +1424,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
         sidebarX = bounds.x
         sidebarY = bounds.y + bounds.height - h
     default:
-        fputs("Error: '\(side)' is not a valid side (left, right, top, bottom)\n", stderr)
-        exit(1)
+        throw WindowToolError.invalidArgument(value: side, label: "side (left, right, top, bottom)")
     }
     moveWindow(window.element, x: sidebarX, y: sidebarY)
     if fullHeight || fullWidth {
@@ -1498,8 +1516,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
 /// Restores windows to their pre-sidebar positions from the snapshot file.
 func sidebarUnpushCommand() throws {
     guard FileManager.default.fileExists(atPath: sidebarSnapshotFile) else {
-        fputs("Error: No sidebar snapshot found at \(sidebarSnapshotFile)\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("No sidebar snapshot found at \(sidebarSnapshotFile)")
     }
     let data = try Data(contentsOf: URL(fileURLWithPath: sidebarSnapshotFile))
     let snapshots = try JSONDecoder().decode([SidebarWindowSnapshot].self, from: data)
@@ -1623,8 +1640,7 @@ func captureWindowImage(windowID: CGWindowID) throws -> CGImage {
 
     if let error = captureError { throw error }
     guard let image = capturedImage else {
-        fputs("Error: Failed to capture window image\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("Failed to capture window image")
     }
     return image
 }
@@ -1640,16 +1656,14 @@ func parsePreviewFlags(_ args: [String]) throws -> String? {
 func previewCommand(bundleId: String, selector: WindowSelector, outputPath: String?) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     guard let windowID = window.windowID else {
-        fputs("Error: Cannot capture window — no window ID available\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("Cannot capture window — no window ID available")
     }
 
     let image = try captureWindowImage(windowID: windowID)
 
     let bitmap = NSBitmapImageRep(cgImage: image)
     guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
-        fputs("Error: Failed to encode PNG\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("Failed to encode PNG")
     }
 
     let resolvedPath: String
@@ -1862,7 +1876,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
 
             guard assetWriter.startWriting() else {
                 fputs("Error: Failed to start writing: \(assetWriter.error?.localizedDescription ?? "unknown")\n", stderr)
-                exit(1)
+                flushJSONAndExit(1)
             }
 
             let delegate = RecordingDelegate(assetWriter: assetWriter, videoInput: videoInput, adaptor: adaptor, fps: fps)
@@ -1893,7 +1907,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
                     } else {
                         print(outputURL.path)
                     }
-                    exit(0)
+                    flushJSONAndExit(0)
                 }
             }
 
@@ -1918,7 +1932,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
 
         } catch let error as NSError where error.domain == "com.apple.ScreenCaptureKit.ErrorDomain" {
             fputs("Error: Screen Recording permission is not granted.\nGrant access in System Settings > Privacy & Security > Screen Recording.\n", stderr)
-            exit(1)
+            flushJSONAndExit(1)
         } catch {
             setupError = error
             semaphore.signal()
@@ -1929,7 +1943,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
         semaphore.wait()
         if let error = setupError {
             fputs("Error: \(error.localizedDescription)\n", stderr)
-            exit(1)
+            flushJSONAndExit(1)
         }
     }
 }
@@ -1937,8 +1951,7 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
 func recordCommand(bundleId: String, selector: WindowSelector, output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     guard let windowID = window.windowID else {
-        fputs("Error: Cannot record window — no window ID available\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("Cannot record window — no window ID available")
     }
 
     let app = NSApplication.shared
@@ -2132,7 +2145,7 @@ func pickCommand() {
 
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] else {
             fputs("Error: Could not get window list\n", stderr)
-            exit(1)
+            flushJSONAndExit(1)
         }
 
         // Walk front-to-back, find first window containing the click
@@ -2152,12 +2165,12 @@ func pickCommand() {
                 } else {
                     print("id=\(windowID)")
                 }
-                exit(0)
+                flushJSONAndExit(0)
             }
         }
 
         fputs("No window found at click location\n", stderr)
-        exit(1)
+        flushJSONAndExit(1)
     }
 
     app.run()
@@ -2271,7 +2284,7 @@ func watchCommand(bundleId: String, interval: Double) throws {
     printState(previous)
     fflush(stdout)
 
-    signal(SIGINT) { _ in exit(0) }
+    signal(SIGINT) { _ in flushJSONAndExit(0) }
 
     while true {
         Thread.sleep(forTimeInterval: interval)
@@ -2335,8 +2348,7 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
     }
 
     guard !windows.isEmpty else {
-        fputs("Error: No windows found\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("No windows found")
     }
 
     let bounds = screenBoundsForWindow(windows[0])
@@ -2377,8 +2389,7 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
 /// Restores windows to their pre-tile positions from the snapshot file.
 func untileCommand() throws {
     guard FileManager.default.fileExists(atPath: tileSnapshotFile) else {
-        fputs("Error: No tile snapshot found at \(tileSnapshotFile)\n", stderr)
-        exit(1)
+        throw WindowToolError.operationFailed("No tile snapshot found at \(tileSnapshotFile)")
     }
     let data = try Data(contentsOf: URL(fileURLWithPath: tileSnapshotFile))
     let snapshots = try JSONDecoder().decode([TileWindowSnapshot].self, from: data)
@@ -2577,8 +2588,7 @@ func runCommand(_ args: [String]) throws {
         try infoCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
     case "columnize":
         guard args.count >= 3 else {
-            fputs("Usage: window-tool columnize <window> <window> [...] [--gap N]\n", stderr)
-            exit(1)
+            throw WindowToolError.missingArguments(usage: "window-tool columnize <window> <window> [...] [--gap N]")
         }
         var columnArgs = Array(args.dropFirst())
         var gap = 10
@@ -2626,8 +2636,7 @@ func runCommand(_ args: [String]) throws {
     case "move":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 3)
         guard rest.count >= 2 else {
-            fputs("Usage: window-tool move <window> <x> <y> [<width> <height>]\n", stderr)
-            exit(1)
+            throw WindowToolError.missingArguments(usage: "window-tool move <window> <x> <y> [<width> <height>]")
         }
         let x = CGFloat(try parseDouble(rest[0], label: "x"))
         let y = CGFloat(try parseDouble(rest[1], label: "y"))
@@ -2641,17 +2650,18 @@ func runCommand(_ args: [String]) throws {
     case "resize":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 3)
         guard rest.count >= 2 else {
-            fputs("Usage: window-tool resize <window> <width> <height>\n", stderr)
-            exit(1)
+            throw WindowToolError.missingArguments(usage: "window-tool resize <window> <width> <height>")
         }
         let width = CGFloat(try parseDouble(rest[0], label: "width"))
         let height = CGFloat(try parseDouble(rest[1], label: "height"))
         try resizeCommand(bundleId: config.bundleId, selector: selector, width: width, height: height)
     case "snap":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 2)
-        guard let posStr = rest.first, let position = SnapPosition(rawValue: posStr) else {
-            fputs("Usage: window-tool snap <window> <position>\nPositions: \(SnapPosition.allNames)\n", stderr)
-            exit(1)
+        guard let posStr = rest.first else {
+            throw WindowToolError.missingArguments(usage: "window-tool snap <window> <position>\nPositions: \(SnapPosition.allNames)")
+        }
+        guard let position = SnapPosition(rawValue: posStr) else {
+            throw WindowToolError.invalidArgument(value: posStr, label: "position (valid: \(SnapPosition.allNames))")
         }
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
@@ -2683,8 +2693,7 @@ func runCommand(_ args: [String]) throws {
     case "move-to-screen":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 2)
         guard let screenArg = rest.first else {
-            fputs("Usage: window-tool move-to-screen <window> <screen>\n", stderr)
-            exit(1)
+            throw WindowToolError.missingArguments(usage: "window-tool move-to-screen <window> <screen>")
         }
         try moveToScreenCommand(bundleId: config.bundleId, selector: selector, screenIndex: try parseInt(screenArg, label: "screen"))
     case "maximize":
@@ -2695,14 +2704,12 @@ func runCommand(_ args: [String]) throws {
         try restoreCommand(bundleId: config.bundleId)
     case "save-layout":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool save-layout <file>\n", stderr)
-            exit(1)
+            throw WindowToolError.missingArguments(usage: "window-tool save-layout <file>")
         }
         try saveLayoutCommand(bundleId: config.bundleId, filePath: args[1])
     case "restore-layout":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool restore-layout <file>\n", stderr)
-            exit(1)
+            throw WindowToolError.missingArguments(usage: "window-tool restore-layout <file>")
         }
         try restoreLayoutCommand(filePath: args[1])
     case "stack":
@@ -2787,16 +2794,14 @@ func runCommand(_ args: [String]) throws {
         try activeWindowCommand(idOnly: idOnly)
     case "shell-init":
         guard args.count >= 2 else {
-            fputs("Usage: window-tool shell-init <zsh|bash|fish>\n", stderr)
-            exit(1)
+            throw WindowToolError.missingArguments(usage: "window-tool shell-init <zsh|bash|fish>")
         }
-        shellInitCommand(shell: args[1])
+        try shellInitCommand(shell: args[1])
     case "help", "--help", "-h":
         usage()
     default:
-        fputs("Unknown command: \(command)\n", stderr)
         usage()
-        exit(1)
+        throw WindowToolError.unknownCommand(command)
     }
 }
 
@@ -2813,9 +2818,8 @@ do {
             } else {
                 fputs("Error: \(error.localizedDescription)\n", stderr)
             }
-            if config.jsonChaining { flushJSONBuffer() }
-            exit(1)
+            flushJSONAndExit(1)
         }
     }
-    if config.jsonChaining { flushJSONBuffer() }
+    flushJSONBuffer()
 }

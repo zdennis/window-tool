@@ -97,6 +97,8 @@ window-tool --app iTerm info 0 + info 1
 window-tool focus id=2457 + highlight + dim id=2789
 ```
 
+A chain stops at the first failing command and exits 1. With `--json`, results from the commands that ran before the failure are still printed to stdout, and the error goes to stderr.
+
 ## How it works
 
 window-tool uses the macOS Accessibility API (`AXUIElement`) for window operations, which is significantly faster than AppleScript's inter-process communication. Window operations are near-instant.
