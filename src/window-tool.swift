@@ -219,12 +219,11 @@ func parseSizeFlag(_ args: [String]) throws -> (CGFloat, CGFloat)? {
     return (n, n)
 }
 
-func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, fullWidth: Bool, push: Bool, unpush: Bool) {
+func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, fullWidth: Bool, push: Bool) {
     var side = "left"
     var fullHeight = false
     var fullWidth = false
     var push = false
-    var unpush = false
     for arg in args {
         if arg.hasPrefix("--side=") {
             side = String(arg.dropFirst(7))
@@ -234,11 +233,9 @@ func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, ful
             fullWidth = true
         } else if arg == "--push" {
             push = true
-        } else if arg == "--unpush" {
-            unpush = true
         }
     }
-    return (side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push, unpush: unpush)
+    return (side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
 }
 
 func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, untile: Bool) {
@@ -2689,11 +2686,11 @@ func runCommand(_ args: [String]) throws {
             print(help)
             break
         }
-        let (selector, rest) = try resolveSelectorWithFlags(args)
-        let (side, fullHeight, fullWidth, push, unpush) = parseSidebarFlags(rest)
-        if unpush {
+        if args.contains("--unpush") {
             try sidebarUnpushCommand()
         } else {
+            let (selector, rest) = try resolveSelectorWithFlags(args)
+            let (side, fullHeight, fullWidth, push) = parseSidebarFlags(rest)
             try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
         }
     case "move-to-screen":
