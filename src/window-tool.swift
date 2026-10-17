@@ -888,6 +888,49 @@ func cocoaToAX(rect: NSRect) -> NSRect {
     NSRect(x: rect.origin.x, y: NSScreen.screens[0].frame.height - rect.maxY, width: rect.width, height: rect.height)
 }
 
+/// The display UUID, which survives reconnects and reboots unlike the index. Nil if macOS has none for the display.
+func displayUUID(_ screen: NSScreen) -> String? {
+    guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+          let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue() else { return nil }
+    return CFUUIDCreateString(nil, uuid) as String
+}
+
+/// The values a screen argument accepts besides a display index.
+let screenNames = ["primary", "external", "left", "right", "next", "prev"]
+
+/// Resolves a screen argument (a display index or one of `screenNames`) to a display index.
+/// `frames` are the displays in global top-left coordinates, indexed as in `screens`; `current` is the display
+/// that `left`, `right`, `next` and `prev` are relative to. `next` and `prev` wrap around in index order.
+func resolveScreenIndex(_ value: String, frames: [CGRect], current: Int) throws -> Int {
+    if let index = Int(value) {
+        guard frames.indices.contains(index) else {
+            throw WindowToolError.screenIndexOutOfRange(index: index, count: frames.count)
+        }
+        return index
+    }
+    func nearest(_ direction: CGFloat) throws -> Int {
+        let candidates = frames.indices.filter { (frames[$0].midX - frames[current].midX) * direction > 0 }
+        guard let best = candidates.min(by: { abs(frames[$0].midX - frames[current].midX) < abs(frames[$1].midX - frames[current].midX) }) else {
+            throw WindowToolError.invalidValue(name: "screen", expected: "an existing display (none is \(direction < 0 ? "left" : "right") of display \(current))", got: value)
+        }
+        return best
+    }
+    switch value {
+    case "primary": return 0
+    case "external":
+        guard frames.count > 1 else {
+            throw WindowToolError.invalidValue(name: "screen", expected: "an existing display (only the primary display is connected)", got: value)
+        }
+        return 1
+    case "left": return try nearest(-1)
+    case "right": return try nearest(1)
+    case "next": return (current + 1) % frames.count
+    case "prev": return (current + frames.count - 1) % frames.count
+    default:
+        throw WindowToolError.unknownChoice(kind: "screen", value: value, choices: ["<index>"] + screenNames)
+    }
+}
+
 /// A display in the `screens` JSON schema, in the same global top-left coordinates windows use. `active-screen` prints the same object.
 func screenJSON(index: Int, screen: NSScreen, mouseLocation: NSPoint) -> [String: Any] {
     let frame = cocoaToAX(rect: screen.frame)
@@ -899,6 +942,7 @@ func screenJSON(index: Int, screen: NSScreen, mouseLocation: NSPoint) -> [String
         "visible_x": roundedInt(visible.origin.x), "visible_y": roundedInt(visible.origin.y),
         "visible_width": roundedInt(visible.width), "visible_height": roundedInt(visible.height),
         "scale": Double(screen.backingScaleFactor),
+        "uuid": displayUUID(screen).map { $0 as Any } ?? NSNull(),
         "main": screen == NSScreen.main,
         "mouse": screen.frame.contains(mouseLocation)
     ]
@@ -1847,13 +1891,13 @@ func unfullscreenCommand(bundleId: String, selector: WindowSelector) throws {
 }
 
 /// Moves a window to a different screen, placing it at the top-left of the visible area.
-func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex: Int) throws {
+func moveToScreenCommand(bundleId: String, selector: WindowSelector, screen: String) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     let screens = NSScreen.screens
-    guard screens.indices.contains(screenIndex) else {
-        throw WindowToolError.screenIndexOutOfRange(index: screenIndex, count: screens.count)
-    }
-    let targetScreen = screens[screenIndex]
+    let frames = screens.map { cocoaToAX(rect: $0.frame) }
+    let center = CGPoint(x: window.position.x + window.size.width / 2, y: window.position.y + window.size.height / 2)
+    let current = frames.firstIndex { $0.contains(center) } ?? 0
+    let targetScreen = screens[try resolveScreenIndex(screen, frames: frames, current: current)]
     let visible = cocoaToAX(rect: targetScreen.visibleFrame)
     moveWindow(window.element, x: visible.origin.x, y: visible.origin.y)
 }
@@ -2887,7 +2931,7 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Maximize a window to fill its screen"),
     CommandSpec(name: "move-to-screen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <screen>",
                 summary: "Move a window to another display",
-                arguments: [("<screen>", "Display index from 'screens'")]),
+                arguments: [("<screen>", "Display index from 'screens', or primary, external, left, right, next, prev")]),
     CommandSpec(name: "focus", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Bring a window to the front"),
     CommandSpec(name: "minimize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
@@ -3280,7 +3324,7 @@ func runCommand(_ args: [String]) throws {
         guard let screenArg = values.first else {
             throw WindowToolError.missingArguments(command: "move-to-screen")
         }
-        try moveToScreenCommand(bundleId: config.bundleId, selector: selector, screenIndex: try parseInt(screenArg, label: "screen"))
+        try moveToScreenCommand(bundleId: config.bundleId, selector: selector, screen: screenArg)
     case "maximize":
         try maximizeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "minimize":
