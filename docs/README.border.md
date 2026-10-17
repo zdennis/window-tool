@@ -23,7 +23,7 @@ window-tool [--app <name-or-id>] border <window> [--color <color>] [--width <pix
 
 ## Details
 
-Runs as a background process that draws a border around the window and updates it as the window moves or resizes. The border process exits automatically if the window closes. Use `unborder` to remove the border, or `unborder-all` to remove all borders.
+Runs as a background process that draws a border around the window and updates it as the window moves or resizes. The border process exits automatically if the window closes. With `id=<N>`, `--app` is optional: the border follows the window, including sheets and dialogs, and is filed under the app that owns it. Use `unborder` to remove the border, or `unborder-all` to remove all borders.
 
 ## Examples
 
@@ -31,6 +31,7 @@ Runs as a background process that draws a border around the window and updates i
 window-tool border 0
 window-tool border 0 --color red --width 5
 window-tool border title="Terminal" --color green
+window-tool border id=1341
 
 # Chaining: border inherits the selector from focus
 window-tool focus 0 + border --color red

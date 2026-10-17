@@ -16,7 +16,7 @@ window-tool [--app <name-or-id>] unborder [<window>]
 
 ## Details
 
-Without a window selector, removes all borders for the target application. With a selector, removes only the border for that specific window. See also `unborder-all` to remove all borders across all applications.
+Without a window selector, removes all borders on windows owned by the target application. With a selector, removes only the border for that specific window; `id=<N>` needs no `--app`. Borders are filed under the app that owns the window, so the no-selector form needs `--app` to name that app; use `unborder-all` otherwise. See also `unborder-all` to remove all borders across all applications.
 
 ## Examples
 

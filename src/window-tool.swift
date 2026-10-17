@@ -379,6 +379,21 @@ func makeWindowInfo(element: AXUIElement, id: Int) -> WindowInfo? {
     return WindowInfo(element: element, id: id, title: title, position: position, size: size, windowID: getCGWindowID(element))
 }
 
+/// Reads a window's current top-left frame, or returns nil once the window no longer exists.
+func currentFrame(of element: AXUIElement) -> CGRect? {
+    var posRef: CFTypeRef?
+    var sizeRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success else {
+        return nil
+    }
+    var position = CGPoint.zero
+    var size = CGSize.zero
+    AXValueGetValue(posRef as! AXValue, .cgPoint, &position)
+    AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+    return CGRect(origin: position, size: size)
+}
+
 /// Retrieves all windows for the given application element.
 /// Each window is returned as a `WindowInfo` with its index, title, position, and size.
 func getWindows(appElement: AXUIElement) -> [WindowInfo] {
@@ -1166,13 +1181,22 @@ class BorderView: NSView {
     }
 }
 
+/// Returns the PID directory for a window's border, keyed by the bundle ID of the app that owns
+/// the window rather than by `--app`, so `id=` selectors and sheets land in the same place.
+func borderOwnerDir(for window: WindowInfo) -> String {
+    var pid: pid_t = 0
+    AXUIElementGetPid(window.element, &pid)
+    let owner = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "\(pid)"
+    return "\(borderPidDir)/\(owner)"
+}
+
 func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, width: CGFloat) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     guard let windowID = window.windowID else {
         throw WindowToolError.operationFailed("Could not determine window ID")
     }
 
-    let appBundleDir = "\(borderPidDir)/\(bundleId)"
+    let appBundleDir = borderOwnerDir(for: window)
     try FileManager.default.createDirectory(atPath: appBundleDir, withIntermediateDirectories: true)
     let pidFile = "\(appBundleDir)/\(windowID).pid"
 
@@ -1229,22 +1253,16 @@ func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, w
     intSource.resume()
 
     Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
-        guard let appElement = getAppElement(bundleId: bundleId) else {
-            timer.invalidate()
-            cleanupAndExit()
-            return
-        }
-        let windows = getWindows(appElement: appElement)
-        guard let w = windows.first(where: { $0.windowID == windowID }) else {
+        guard let frame = currentFrame(of: window.element) else {
             timer.invalidate()
             cleanupAndExit()
             return
         }
 
         let screenHeight = NSScreen.screens[0].frame.height
-        let newCocoaY = screenHeight - w.position.y - w.size.height
-        let newFrame = NSRect(x: w.position.x, y: newCocoaY,
-                              width: w.size.width, height: w.size.height)
+        let newCocoaY = screenHeight - frame.origin.y - frame.height
+        let newFrame = NSRect(x: frame.origin.x, y: newCocoaY,
+                              width: frame.width, height: frame.height)
         if overlay.frame != newFrame {
             overlay.setFrame(newFrame, display: false)
             view.frame = NSRect(origin: .zero, size: newFrame.size)
@@ -1257,13 +1275,12 @@ func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, w
 }
 
 func unborderCommand(bundleId: String, selector: WindowSelector? = nil) {
-    let appDir = "\(borderPidDir)/\(bundleId)"
-
     if let selector = selector {
         guard let window = try? resolveWindow(bundleId: bundleId, selector: selector),
               let windowID = window.windowID else {
             return
         }
+        let appDir = borderOwnerDir(for: window)
         let pidFile = "\(appDir)/\(windowID).pid"
         if let content = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
            let pid = Int32(content) {
@@ -1276,6 +1293,8 @@ func unborderCommand(bundleId: String, selector: WindowSelector? = nil) {
         return
     }
 
+    // Borders are filed under the owning app (see borderOwnerDir), so --app must name the owner here.
+    let appDir = "\(borderPidDir)/\(bundleId)"
     guard let files = try? FileManager.default.contentsOfDirectory(atPath: appDir) else {
         return
     }
