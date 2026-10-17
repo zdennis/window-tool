@@ -30,6 +30,8 @@ Records the window contents using ScreenCaptureKit. By default, shows a 3-second
 
 Prints the output file path on completion. With `--json`, outputs path, window_id, width, and height.
 
+Exits 1 with an error on stderr, prints no path, and deletes the partial output file if the recording could not be written or no frames were captured (for example, a minimized window).
+
 ## Examples
 
 ```sh

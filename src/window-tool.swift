@@ -1794,6 +1794,7 @@ class RecordingDelegate: NSObject, SCStreamOutput {
     var startTime: CFAbsoluteTime?
     var lastPixelBuffer: CVPixelBuffer?
     var frameTimer: DispatchSourceTimer?
+    private(set) var framesWritten = 0
     private let lock = NSLock()
 
     init(assetWriter: AVAssetWriter, videoInput: AVAssetWriterInput, adaptor: AVAssetWriterInputPixelBufferAdaptor, fps: Int) {
@@ -1831,7 +1832,11 @@ class RecordingDelegate: NSObject, SCStreamOutput {
         let elapsed = CFAbsoluteTimeGetCurrent() - start
         let time = CMTime(seconds: elapsed, preferredTimescale: CMTimeScale(fps * 100))
         if videoInput.isReadyForMoreMediaData {
-            adaptor.append(pixelBuffer, withPresentationTime: time)
+            if adaptor.append(pixelBuffer, withPresentationTime: time) {
+                lock.lock()
+                framesWritten += 1
+                lock.unlock()
+            }
         }
     }
 
@@ -1967,6 +1972,14 @@ func startRecording(windowID: CGWindowID, output: String, fps: Int, duration: Do
                     try? await stream.stopCapture()
                     videoInput.markAsFinished()
                     await assetWriter.finishWriting()
+                    if assetWriter.status != .completed || delegate.framesWritten == 0 {
+                        let reason = delegate.framesWritten == 0
+                            ? "no frames were captured (is the window minimized or off-screen? restore it and retry)"
+                            : (assetWriter.error?.localizedDescription ?? "unknown error")
+                        try? FileManager.default.removeItem(at: outputURL)
+                        fputs("Error: Recording failed: \(reason)\n", stderr)
+                        flushJSONAndExit(1)
+                    }
                     fputs("Recording saved to \(outputURL.path)\n", stderr)
                     if config.jsonOutput {
                         printJSON(["path": outputURL.path, "window_id": Int(windowID), "width": width, "height": height])
