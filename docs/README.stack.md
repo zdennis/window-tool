@@ -5,7 +5,7 @@ Cascade all windows with a fixed offset between each.
 ## Usage
 
 ```sh
-window-tool [--app <name-or-id>] stack [offset]
+window-tool --app <name-or-id> stack [offset]
 ```
 
 ## Arguments

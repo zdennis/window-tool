@@ -35,7 +35,10 @@ If `/usr/local/bin` does not exist (common on Apple Silicon), use `ln -s "$PWD/b
 
 ```
 window-tool [--app <name-or-id>] <command> [args...]
+window-tool help [<command>]
 ```
+
+Run `window-tool help` for every command grouped by purpose, and `window-tool help <command>` or `window-tool <command> --help` for one command's arguments and options.
 
 Use `--app` to target a specific application by name or bundle ID. `--app` is required whenever you select a window by index or `title=`; there is no frontmost-app default. With `id=<N>` selectors, `--app` is optional because the owning app is detected automatically.
 
@@ -55,6 +58,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `flash` | [README](docs/README.flash.md) | Flash a colored overlay on a window |
 | `focus` | [README](docs/README.focus.md) | Bring a window to front |
 | `fullscreen` | [README](docs/README.fullscreen.md) | Enter macOS fullscreen mode |
+| `help` | [README](docs/README.help.md) | Show all commands, or one command's arguments and options |
 | `highlight` | [README](docs/README.highlight.md) | Briefly highlight a window with a border (blocks until it dismisses) |
 | `identify` | [README](docs/README.identify.md) | Show window IDs on all windows (blocks while shown) |
 | `info` | [README](docs/README.info.md) | Show detailed info for a window |
@@ -89,6 +93,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 |--------|-------------|
 | `--app <name-or-id>` | Target application by name or bundle ID; an exact app name (case-insensitive) wins over substring matches |
 | `--json` | Output in JSON format. Status messages (such as `Moved 2 window(s)…`) go to stderr so stdout stays valid JSON |
+| `--help`, `-h` | Show help; after a command, show that command's help without running it |
 | `--version`, `-v` | Print version and exit |
 
 ### Command chaining

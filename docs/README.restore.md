@@ -5,7 +5,7 @@ Restore (unminimize) all minimized windows for an application.
 ## Usage
 
 ```sh
-window-tool [--app <name-or-id>] restore
+window-tool --app <name-or-id> restore
 ```
 
 ## Details

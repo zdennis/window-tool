@@ -5,7 +5,7 @@ Save the current window layout for an application to a JSON file.
 ## Usage
 
 ```sh
-window-tool [--app <name-or-id>] save-layout <file>
+window-tool --app <name-or-id> save-layout <file>
 ```
 
 ## Arguments

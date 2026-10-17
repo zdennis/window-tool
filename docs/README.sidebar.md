@@ -27,7 +27,6 @@ window-tool sidebar --unpush
 | `--full-width` | Maximize the window width to fill the visible screen area |
 | `--push` | Push all overlapping windows on the same screen away from the sidebar |
 | `--unpush` | Restore all windows to their pre-push positions and sizes |
-| `--help`, `-h` | Show command-specific help |
 
 ## Details
 

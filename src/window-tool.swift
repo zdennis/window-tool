@@ -73,7 +73,7 @@ enum WindowToolError: LocalizedError {
     case invalidArgument(value: String, label: String)
     case appRequired
     case missingWindowSelector
-    case missingArguments(usage: String)
+    case missingArguments(command: String)
     case unknownCommand(String)
     case operationFailed(String)
 
@@ -100,8 +100,9 @@ enum WindowToolError: LocalizedError {
             return "--app is required for this command"
         case .missingWindowSelector:
             return "Missing window selector. Use an index (0, 1, ...), id=<N>, or title=<pattern>"
-        case .missingArguments(let usage):
-            return "Missing arguments\nUsage: \(usage)"
+        case .missingArguments(let command):
+            let usage = commandSpec(named: command)?.usageLine ?? "window-tool \(command)"
+            return "Missing arguments\nUsage: \(usage)\nRun 'window-tool help \(command)' for details."
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         case .operationFailed(let message):
@@ -2507,73 +2508,236 @@ func countCommand(bundleId: String) throws {
     if config.jsonOutput { printJSON(["count": windows.count]) } else { print("\(windows.count)") }
 }
 
+// MARK: - Command Metadata
+
+enum CommandGroup: String, CaseIterable {
+    case query = "Query"
+    case moveSize = "Move/size"
+    case layout = "Layout"
+    case overlays = "Overlays"
+    case capture = "Capture"
+    case meta = "Meta"
+}
+
+/// How a command uses --app. `optional` commands take a <window>, and `id=` selectors find the app themselves.
+enum AppUsage {
+    case required, optional, none
+}
+
+/// One command's help. `synopsis` lists positional arguments only; " [options]" is added when `flags` is non-empty.
+/// `mutates` is true when the command changes a window's position, size, state or focus (for `commands --json`, WT22).
+struct CommandSpec {
+    let name: String
+    let group: CommandGroup
+    let app: AppUsage
+    let mutates: Bool
+    var synopsis = ""
+    let summary: String
+    var arguments: [(name: String, description: String)] = []
+    var flags: [(name: String, description: String)] = []
+
+    var usageLine: String {
+        let appPrefix: String
+        switch app {
+        case .required: appPrefix = "--app <name-or-id> "
+        case .optional: appPrefix = "[--app <name-or-id>] "
+        case .none: appPrefix = ""
+        }
+        let parts = [name, synopsis, flags.isEmpty ? "" : "[options]"].filter { !$0.isEmpty }
+        return "window-tool \(appPrefix)\(parts.joined(separator: " "))"
+    }
+
+    var help: String {
+        var lines = ["Usage: \(usageLine)", "", summary + "."]
+        for (title, rows) in [("Arguments", arguments), ("Options", flags)] where !rows.isEmpty {
+            lines += ["", "\(title):"] + helpRows(rows)
+        }
+        if synopsis.contains("<window>") {
+            lines += ["", "<window> is an index from 'list', id=<window-id>, or title=<pattern>."]
+            if app == .optional {
+                lines.append("Index and title= selectors need --app; id= finds the window's app itself.")
+            }
+        }
+        lines += ["", "Run 'window-tool help' for global options, chaining and all commands."]
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// Formats name/description pairs as an indented two-column list.
+func helpRows(_ rows: [(name: String, description: String)], width: Int? = nil) -> [String] {
+    let width = width ?? rows.map(\.name.count).max() ?? 0
+    return rows.map { "  " + $0.name.padding(toLength: width + 2, withPad: " ", startingAt: 0) + $0.description }
+}
+
+/// Every command, in the order the top-level help lists them within each group.
+/// Each `runCommand` case needs a spec here, or `help <command>` and its usage errors cannot find it.
+let commandSpecs: [CommandSpec] = [
+    CommandSpec(name: "list", group: .query, app: .optional, mutates: false,
+                summary: "List windows (all apps, or one app with --app)"),
+    CommandSpec(name: "info", group: .query, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Show detailed info for a window"),
+    CommandSpec(name: "count", group: .query, app: .required, mutates: false,
+                summary: "Print the number of windows for --app"),
+    CommandSpec(name: "active-window", group: .query, app: .none, mutates: false,
+                summary: "Print info about the frontmost app's primary window",
+                flags: [("--id", "Print only the window ID")]),
+    CommandSpec(name: "active-screen", group: .query, app: .none, mutates: false,
+                summary: "Print the active screen's usable bounds (x, y, width, height)"),
+    CommandSpec(name: "screens", group: .query, app: .none, mutates: false,
+                summary: "List all displays with bounds"),
+    CommandSpec(name: "pick", group: .query, app: .none, mutates: false,
+                summary: "Click a window to print its ID (blocks until you click)"),
+    CommandSpec(name: "watch", group: .query, app: .required, mutates: false, synopsis: "[interval]",
+                summary: "Print window changes for --app until interrupted",
+                arguments: [("[interval]", "Poll interval in seconds, greater than 0 (default: 1.0)")]),
+
+    CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position>",
+                summary: "Snap a window to a screen region",
+                arguments: [("<position>", SnapPosition.allNames)]),
+    CommandSpec(name: "move", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <x> <y> [<width> <height>]",
+                summary: "Move a window, optionally resizing it",
+                arguments: [("<x> <y>", "Top-left corner in screen points"),
+                            ("<width> <height>", "New size in points")]),
+    CommandSpec(name: "resize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <width> <height>",
+                summary: "Resize a window"),
+    CommandSpec(name: "center", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Center a window on its screen",
+                flags: [("--size=N", "Resize to N x N points first"),
+                        ("--size=W,H", "Resize to W x H points first (also --size=WxH)")]),
+    CommandSpec(name: "maximize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Maximize a window to fill its screen"),
+    CommandSpec(name: "move-to-screen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <screen>",
+                summary: "Move a window to another display",
+                arguments: [("<screen>", "Display index from 'screens'")]),
+    CommandSpec(name: "focus", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Bring a window to the front"),
+    CommandSpec(name: "minimize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Minimize a window"),
+    CommandSpec(name: "restore", group: .moveSize, app: .required, mutates: true,
+                summary: "Restore all minimized windows for --app"),
+    CommandSpec(name: "fullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Enter macOS fullscreen"),
+    CommandSpec(name: "unfullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Exit macOS fullscreen"),
+
+    CommandSpec(name: "tile", group: .layout, app: .required, mutates: true, synopsis: "[<window>...]",
+                summary: "Tile windows in a grid (all windows for --app when none are given)",
+                flags: [("--gap N", "Gap between windows in pixels (default: 10)"),
+                        ("--cols N", "Force a number of columns, greater than 0"),
+                        ("--untile", "Restore windows to their pre-tile positions (no --app needed)")]),
+    CommandSpec(name: "columnize", group: .layout, app: .optional, mutates: true, synopsis: "<window> <window> [<window>...]",
+                summary: "Arrange windows side by side in columns",
+                flags: [("--gap N", "Gap between columns in pixels (default: 10)")]),
+    CommandSpec(name: "stack", group: .layout, app: .required, mutates: true, synopsis: "[offset]",
+                summary: "Cascade the windows for --app",
+                arguments: [("[offset]", "Pixels between each window (default: 30)")]),
+    CommandSpec(name: "sidebar", group: .layout, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Pin a window to an edge of its screen",
+                flags: [("--side=left|right|top|bottom", "Edge to pin to (default: left)"),
+                        ("--full-height", "Fill the screen height"),
+                        ("--full-width", "Fill the screen width"),
+                        ("--push", "Push overlapping windows away from the sidebar"),
+                        ("--unpush", "Restore windows moved by --push (takes no <window>)")]),
+    CommandSpec(name: "save-layout", group: .layout, app: .required, mutates: false, synopsis: "<file>",
+                summary: "Save the window layout for --app to a JSON file"),
+    CommandSpec(name: "restore-layout", group: .layout, app: .none, mutates: true, synopsis: "<file>",
+                summary: "Restore a window layout from a JSON file (the file names the app)"),
+
+    CommandSpec(name: "highlight", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Briefly highlight a window (blocks until it dismisses)",
+                flags: [("--color <color>", "Overlay color (default: red)"),
+                        ("--duration <seconds>", "How long to show it (default: 3)")]),
+    CommandSpec(name: "flash", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Flash a colored overlay on a window",
+                flags: [("--color <color>", "Overlay color (default: green)"),
+                        ("--count N", "Number of flashes, greater than 0 (default: 1)")]),
+    CommandSpec(name: "border", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Add a persistent border that tracks a window",
+                flags: [("--color <color>", "Border color (default: blue)"),
+                        ("--width N", "Border width in points (default: 3)")]),
+    CommandSpec(name: "unborder", group: .overlays, app: .optional, mutates: false, synopsis: "[<window>]",
+                summary: "Remove borders for --app, or for one window",
+                arguments: [("[<window>]", "Window whose border to remove; without it, --app is required")]),
+    CommandSpec(name: "unborder-all", group: .overlays, app: .none, mutates: false,
+                summary: "Remove all active borders"),
+    CommandSpec(name: "dim", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Dim everything except a window",
+                flags: [("--opacity <value>", "Overlay opacity, 0.0-1.0 (default: 0.5)"),
+                        ("--duration <seconds>", "Dismiss after this long; 0 stays until 'undim' (default: 0)")]),
+    CommandSpec(name: "undim", group: .overlays, app: .none, mutates: false,
+                summary: "Remove the active dim overlay"),
+    CommandSpec(name: "identify", group: .overlays, app: .optional, mutates: false,
+                summary: "Label visible windows with their IDs (blocks until they dismiss)",
+                flags: [("--color <color>", "Label color (default: magenta)"),
+                        ("--duration <seconds>", "How long to show the labels (default: 3)")]),
+    CommandSpec(name: "shake", group: .overlays, app: .optional, mutates: true, synopsis: "<window> [offset] [count] [delay]",
+                summary: "Shake a window to draw attention to it",
+                arguments: [("[offset]", "Shake distance in pixels (default: 12)"),
+                            ("[count]", "Number of shakes, greater than 0 (default: 6)"),
+                            ("[delay]", "Seconds between movements (default: 0.04)")]),
+
+    CommandSpec(name: "preview", group: .capture, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Save a screenshot of a window as PNG",
+                flags: [("--output <path>", "Output file (default: $TMPDIR/window-tool-preview-<id>.png)")]),
+    CommandSpec(name: "record", group: .capture, app: .optional, mutates: false, synopsis: "<window> --output <path>",
+                summary: "Record video of a window",
+                flags: [("--output <path>", "Output file (.mov or .mp4), required"),
+                        ("--fps N", "Frames per second, greater than 0 (default: 30)"),
+                        ("--duration <seconds>", "Stop after this long (default: until Ctrl-C)"),
+                        ("--no-countdown", "Skip the 3-second countdown"),
+                        ("--no-border", "Don't show a border while recording")]),
+
+    CommandSpec(name: "help", group: .meta, app: .none, mutates: false, synopsis: "[<command>]",
+                summary: "Show all commands, or one command's arguments and options"),
+    CommandSpec(name: "shell-init", group: .meta, app: .none, mutates: false, synopsis: "<shell>",
+                summary: "Print a shell integration snippet",
+                arguments: [("<shell>", "zsh, bash or fish")]),
+]
+
+func commandSpec(named name: String) -> CommandSpec? {
+    commandSpecs.first { $0.name == name }
+}
+
 // MARK: - Main
 
-/// Prints the CLI usage/help text.
+/// Prints the top-level help: every command grouped as in `commandSpecs`, then selectors, options and chaining.
 func usage() {
+    let entries = commandSpecs.map { spec in
+        (group: spec.group, name: [spec.name, spec.synopsis].filter { !$0.isEmpty }.joined(separator: " "), description: spec.summary)
+    }
+    let width = entries.map(\.name.count).max() ?? 0
+    var lines = [
+        "Usage: window-tool [--app <name-or-id>] [--json] <command> [args...]",
+        "       window-tool help <command>        Show one command's arguments and options",
+    ]
+    for group in CommandGroup.allCases {
+        let rows = entries.filter { $0.group == group }.map { (name: $0.name, description: $0.description) }
+        lines += ["", "\(group.rawValue):"] + helpRows(rows, width: width)
+    }
     let help = """
-    Usage: window-tool [--app <name-or-id>] <command> [args...]
-
-    Commands:
-      active-screen                            Print active screen usable bounds (x, y, width, height)
-      active-window [--id]                     Print info about the frontmost app's primary window
-      border <window> [--color blue] [--width 3]    Add a persistent border that tracks a window
-      center <window> [--size=N or --size=W,H]  Center window on screen (optionally resize)
-      columnize <w> <w> [<w>...] [--gap N]     Arrange windows side-by-side in columns
-      count                                    Print number of windows
-      dim <window> [--opacity 0.5] [--duration 0]  Dim everything except a window
-      flash <window> [--color green] [--count 1]  Flash a colored overlay on a window
-      focus <window>                           Bring window to front
-      fullscreen <window>                      Enter macOS fullscreen mode
-      highlight <window> [--color C] [--duration S]  Briefly highlight a window (blocks until it dismisses)
-      identify [--color C] [--duration S]       Show window IDs on all windows (blocks for 3s by default)
-      info <window>                            Show detailed info for a window
-      list                                     List windows (all apps, or one app with --app)
-      maximize <window>                        Maximize window to fill screen
-      minimize <window>                        Minimize a window
-      move <window> <x> <y> [<w> <h>]          Move/resize window
-      move-to-screen <window> <screen>         Move window to a different display
-      pick                                     Click a window to get its ID
-      preview <window> [--output <path>]       Capture a window screenshot as PNG
-      record <window> --output <path> [options]  Record video of a window
-        Record options: [--fps 30 (>0)] [--duration <seconds>] [--no-countdown] [--no-border]
-      resize <window> <width> <height>         Resize window
-      restore                                  Restore all minimized windows
-      restore-layout <file>                    Restore window layout from a JSON file
-      save-layout <file>                       Save window layout to a JSON file
-      screens                                  List all displays with bounds
-      shake <window> [offset] [count>0] [delay]  Shake a window
-      shell-init <shell>                       Print shell integration snippet (zsh, bash, fish)
-      sidebar <window> [--side=left|right|top|bottom] [options]  Pin window to screen edge
-      sidebar --unpush                       Restore windows pushed by --push
-      snap <window> <position>                 Snap window to screen region
-      stack [offset]                           Cascade windows with offset (default: 30)
-      tile [<w>...] [--gap N] [--cols N]      Tile windows in a grid layout
-      tile --untile                            Restore windows to pre-tile positions
-      unborder [<window>]                      Remove borders for --app (or one window); --app required without <window>
-      unborder-all                             Remove all active borders
-      undim                                    Remove active dim overlay
-      unfullscreen <window>                    Exit macOS fullscreen mode
-      watch [interval>0]                       Watch for window changes (default: 1.0s)
 
     Window selectors:
       <window> can be:
-        0, 1, 2...          Index from 'list' output
-        id=<window_id>      CGWindowID (e.g., id=1341)
-        title=<pattern>     Substring match on window title (e.g., title="my notes")
-      Use 'list' to see available indices and window IDs
+        0, 1, 2...          Index from 'list' output (needs --app)
+        id=<window_id>      CGWindowID (e.g., id=1341); finds the window's app itself
+        title=<pattern>     Substring match on window title (needs --app)
+      Use 'list' to see available indices and window IDs. Prefer id= in scripts.
 
     Snap positions:
-      left, right, top, bottom, top-left, top-right,
-      bottom-left, bottom-right, center, maximize
+      \(SnapPosition.allNames)
 
     Colors:
-      red, green, blue, yellow, orange, purple, white, cyan, magenta, random
+      \(validColors.joined(separator: ", "))
 
     Options:
       --app <name-or-id>  Target application by name or bundle ID
       --json              Output in JSON format
+      --help, -h          Show help; after a command, show that command's help
       --version, -v       Print version and exit
+
+    Output:
+      Results go to stdout and errors to stderr. With --json, status messages
+      also go to stderr so stdout holds only JSON.
 
     Command chaining:
       Use + to run multiple commands in sequence, sharing --app and --json flags.
@@ -2588,12 +2752,13 @@ func usage() {
       window-tool list
       window-tool --app Safari list
       window-tool --app iTerm columnize 0 1 2
-      window-tool move 0 100 50 1200 900
+      window-tool --app Safari move 0 100 50 1200 900
       window-tool focus id=1341
-      window-tool move title="my-notes" 0 0 1400 1000
+      window-tool --app Notes move title="my-notes" 0 0 1400 1000
       window-tool --app Safari focus 0 + highlight 0
+      window-tool help snap
     """
-    print(help)
+    print((lines + [help]).joined(separator: "\n"))
 }
 
 var args = Array(CommandLine.arguments.dropFirst())
@@ -2656,7 +2821,10 @@ func splitCommands(_ args: [String]) -> [[String]] {
     return commands
 }
 
-let commandGroups = splitCommands(args)
+let splitGroups = splitCommands(args)
+// `<command> --help` (or -h) anywhere in a chain shows that command's help and runs nothing.
+let helpTarget = splitGroups.first { $0.dropFirst().contains { $0 == "--help" || $0 == "-h" } }
+let commandGroups = helpTarget.map { [["help", $0[0]]] } ?? splitGroups
 
 func runCommand(_ args: [String]) throws {
     let command = args[0]
@@ -2677,7 +2845,7 @@ func runCommand(_ args: [String]) throws {
         try infoCommand(bundleId: config.bundleId, selector: try resolveSelector(args))
     case "columnize":
         guard args.count >= 3 else {
-            throw WindowToolError.missingArguments(usage: "window-tool columnize <window> <window> [...] [--gap N]")
+            throw WindowToolError.missingArguments(command: "columnize")
         }
         var columnArgs = Array(args.dropFirst())
         var gap = 10
@@ -2691,23 +2859,6 @@ func runCommand(_ args: [String]) throws {
         let selectors = try columnArgs.map { try parseWindowSelector($0) }
         try columnizeCommand(bundleId: config.bundleId, selectors: selectors, gap: gap)
     case "tile":
-        if args.contains("--help") || args.contains("-h") {
-            let help = """
-            Usage: window-tool [--app <name-or-id>] tile [<window>...] [options]
-                   window-tool [--app <name-or-id>] tile --untile
-
-            Arrange windows in an automatically calculated grid layout.
-            With no window selectors, tiles all windows for the app.
-
-            Options:
-              --gap N             Gap between windows in pixels (default: 10)
-              --cols N            Force a specific number of columns (> 0)
-              --untile            Restore windows to their pre-tile positions
-              --help, -h          Show this help
-            """
-            print(help)
-            break
-        }
         var tileArgs = Array(args.dropFirst())
         let tileFlags = try parseTileFlags(&tileArgs)
         if tileFlags.untile {
@@ -2725,7 +2876,7 @@ func runCommand(_ args: [String]) throws {
     case "move":
         let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [2, 4])
         guard rest.count >= 2 else {
-            throw WindowToolError.missingArguments(usage: "window-tool move <window> <x> <y> [<width> <height>]")
+            throw WindowToolError.missingArguments(command: "move")
         }
         let x = CGFloat(try parseDouble(rest[0], label: "x"))
         let y = CGFloat(try parseDouble(rest[1], label: "y"))
@@ -2739,7 +2890,7 @@ func runCommand(_ args: [String]) throws {
     case "resize":
         let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [2])
         guard rest.count >= 2 else {
-            throw WindowToolError.missingArguments(usage: "window-tool resize <window> <width> <height>")
+            throw WindowToolError.missingArguments(command: "resize")
         }
         let width = CGFloat(try parseDouble(rest[0], label: "width"))
         let height = CGFloat(try parseDouble(rest[1], label: "height"))
@@ -2747,31 +2898,13 @@ func runCommand(_ args: [String]) throws {
     case "snap":
         let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [1])
         guard let posStr = rest.first else {
-            throw WindowToolError.missingArguments(usage: "window-tool snap <window> <position>\nPositions: \(SnapPosition.allNames)")
+            throw WindowToolError.missingArguments(command: "snap")
         }
         guard let position = SnapPosition(rawValue: posStr) else {
             throw WindowToolError.invalidArgument(value: posStr, label: "position (valid: \(SnapPosition.allNames))")
         }
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
-        if args.contains("--help") || args.contains("-h") {
-            let help = """
-            Usage: window-tool [--app <name-or-id>] sidebar <window> [options]
-                   window-tool sidebar --unpush
-
-            Pin a window to an edge of its screen as a sidebar.
-
-            Options:
-              --side=left|right|top|bottom  Which edge to pin to (default: left)
-              --full-height       Maximize window height to fill screen
-              --full-width        Maximize window width to fill screen
-              --push              Push overlapping windows away from the sidebar
-              --unpush            Restore windows to their pre-push positions
-              --help, -h          Show this help
-            """
-            print(help)
-            break
-        }
         if args.contains("--unpush") {
             try sidebarUnpushCommand()
         } else {
@@ -2782,7 +2915,7 @@ func runCommand(_ args: [String]) throws {
     case "move-to-screen":
         let (selector, rest) = try resolveSelectorAndArgs(args, argCounts: [1])
         guard let screenArg = rest.first else {
-            throw WindowToolError.missingArguments(usage: "window-tool move-to-screen <window> <screen>")
+            throw WindowToolError.missingArguments(command: "move-to-screen")
         }
         try moveToScreenCommand(bundleId: config.bundleId, selector: selector, screenIndex: try parseInt(screenArg, label: "screen"))
     case "maximize":
@@ -2793,12 +2926,12 @@ func runCommand(_ args: [String]) throws {
         try restoreCommand(bundleId: config.bundleId)
     case "save-layout":
         guard args.count >= 2 else {
-            throw WindowToolError.missingArguments(usage: "window-tool save-layout <file>")
+            throw WindowToolError.missingArguments(command: "save-layout")
         }
         try saveLayoutCommand(bundleId: config.bundleId, filePath: args[1])
     case "restore-layout":
         guard args.count >= 2 else {
-            throw WindowToolError.missingArguments(usage: "window-tool restore-layout <file>")
+            throw WindowToolError.missingArguments(command: "restore-layout")
         }
         try restoreLayoutCommand(filePath: args[1])
     case "stack":
@@ -2883,11 +3016,18 @@ func runCommand(_ args: [String]) throws {
         try activeWindowCommand(idOnly: idOnly)
     case "shell-init":
         guard args.count >= 2 else {
-            throw WindowToolError.missingArguments(usage: "window-tool shell-init <zsh|bash|fish>")
+            throw WindowToolError.missingArguments(command: "shell-init")
         }
         try shellInitCommand(shell: args[1])
     case "help", "--help", "-h":
-        usage()
+        guard args.count >= 2 else {
+            usage()
+            break
+        }
+        guard let spec = commandSpec(named: args[1]) else {
+            throw WindowToolError.unknownCommand(args[1])
+        }
+        print(spec.help)
     default:
         usage()
         throw WindowToolError.unknownCommand(command)

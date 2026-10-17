@@ -5,8 +5,8 @@ Arranges windows in an automatically calculated grid layout with gaps between th
 ## Usage
 
 ```sh
-window-tool [--app <name-or-id>] tile [<window>...] [options]
-window-tool [--app <name-or-id>] tile --untile
+window-tool --app <name-or-id> tile [<window>...] [options]
+window-tool tile --untile
 ```
 
 ## Arguments
@@ -22,7 +22,6 @@ window-tool [--app <name-or-id>] tile --untile
 | `--gap N` | Gap between windows in pixels (default: 10) |
 | `--cols N` | Force a specific number of columns (must be greater than 0) |
 | `--untile` | Restore windows to their pre-tile positions |
-| `--help`, `-h` | Show command-specific help |
 
 ## Details
 

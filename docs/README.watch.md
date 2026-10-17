@@ -5,7 +5,7 @@ Watch for window changes and print updates.
 ## Usage
 
 ```sh
-window-tool [--app <name-or-id>] watch [interval]
+window-tool --app <name-or-id> watch [interval]
 ```
 
 ## Arguments
