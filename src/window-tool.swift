@@ -98,6 +98,10 @@ enum WindowToolError: LocalizedError {
     case screenIndexOutOfRange(index: Int, count: Int)
     case noWindows
     case noPickableWindow
+    /// A `--path` index past the end: `parent` is the path of the element that has only `count` children.
+    case noElementAtPath(path: String, parent: String, count: Int, windowID: CGWindowID?)
+    /// `text --focused` found no focused element in the window (or under `--path`).
+    case noFocusedElement(windowID: CGWindowID?, path: String)
     /// A window answered the close with a sheet (such as "Do you want to save changes?") instead of closing.
     case unsavedChanges(windows: [(windowID: CGWindowID?, title: String)])
     /// `wait` ran out of time; `what` finishes the sentence "Timed out after Ns waiting for ...".
@@ -147,6 +151,14 @@ enum WindowToolError: LocalizedError {
             return "No windows found"
         case .noPickableWindow:
             return "No pickable window at click location (menu bar, Dock and status items are skipped)"
+        case .noElementAtPath(let path, let parent, let count, let windowID):
+            let owner = parent.isEmpty ? "the window" : "element \(parent)"
+            let tree = windowID.map { "'window-tool tree id=\($0)'" } ?? "'window-tool tree'"
+            return "No element at path '\(path)': \(owner) has \(count == 0 ? "no children" : "children 0..\(count - 1)"). Paths change when the window's UI does; run \(tree) again."
+        case .noFocusedElement(let windowID, let path):
+            let window = windowID.map { "window id=\($0)" } ?? "the window"
+            let focus = windowID.map { "'window-tool focus id=\($0)'" } ?? "'window-tool focus'"
+            return "No element \(path.isEmpty ? "in \(window)" : "under path \(path) of \(window)") has keyboard focus. Focus belongs to the app, so another of its windows may hold it: click into a field or run \(focus) first."
         case .unsavedChanges(let windows):
             return "Not closed, the window is asking about unsaved changes: \(windows.map { "'\($0.title)'" }.joined(separator: ", ")). Answer the prompt in the app, then run close again."
         case .timedOut(let what, let seconds):
@@ -202,6 +214,8 @@ enum WindowToolError: LocalizedError {
         case .screenIndexOutOfRange: return "screen_index_out_of_range"
         case .noWindows: return "no_windows"
         case .noPickableWindow: return "no_pickable_window"
+        case .noElementAtPath: return "no_element_at_path"
+        case .noFocusedElement: return "no_focused_element"
         case .unsavedChanges: return "unsaved_changes"
         case .timedOut: return "timeout"
         case .accessibilityNotEnabled: return "accessibility_not_enabled"
@@ -239,6 +253,10 @@ enum WindowToolError: LocalizedError {
             return ["title": pattern, "matches": matches.map { ["index": $0.index, "window_id": $0.windowID.map { Int($0) } ?? NSNull(), "title": $0.title] as [String: Any] }]
         case .noWindowMatchingID(let windowID):
             return ["window_id": Int(windowID)]
+        case .noElementAtPath(let path, let parent, let count, let windowID):
+            return ["path": path, "parent": parent, "count": count, "window_id": windowID.map { Int($0) } ?? NSNull()]
+        case .noFocusedElement(let windowID, let path):
+            return ["window_id": windowID.map { Int($0) } ?? NSNull(), "path": path]
         case .invalidValue(let name, let expected, let got):
             return ["name": name, "expected": expected, "got": got]
         case .unknownChoice(let kind, let value, let choices):
@@ -270,7 +288,7 @@ enum WindowToolError: LocalizedError {
         }
     }
 
-    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 6 unsaved changes blocked a close, 7 a wait or watch --once timed out, 1 anything else.
+    /// 2 usage, 3 app not found, 4 window or element not found, 5 permission denied, 6 unsaved changes blocked a close, 7 a wait or watch --once timed out, 1 anything else.
     var exitCode: Int32 {
         switch self {
         case .invalidValue, .unknownChoice, .optionRequired, .appRequired, .missingWindowSelector, .unknownOption,
@@ -279,7 +297,8 @@ enum WindowToolError: LocalizedError {
             return 2
         case .appNotFound, .ambiguousApp:
             return 3
-        case .windowIndexOutOfRange, .noWindowMatchingTitle, .ambiguousWindowTitle, .noWindowMatchingID, .noWindows, .noPickableWindow:
+        case .windowIndexOutOfRange, .noWindowMatchingTitle, .ambiguousWindowTitle, .noWindowMatchingID, .noWindows, .noPickableWindow,
+             .noElementAtPath, .noFocusedElement:
             return 4
         case .accessibilityNotEnabled, .screenRecordingNotEnabled:
             return 5
@@ -2222,11 +2241,24 @@ func treeValue(_ value: Any) -> Any? {
     return nil
 }
 
+/// True for a password field, whichever of role or subrole an app reports `AXSecureTextField` in. Neither its value
+/// nor any of its descendants' values is ever printed.
+func isSecureText(role: String?, subrole: String?) -> Bool {
+    role == kAXSecureTextFieldSubrole || subrole == kAXSecureTextFieldSubrole
+}
+
+/// `isSecureText` for an element, reading its role and subrole.
+func isSecureElement(_ element: AXUIElement) -> Bool {
+    isSecureText(role: axString(element, kAXRoleAttribute), subrole: axString(element, kAXSubroleAttribute))
+}
+
 /// One element of `tree`: its `path` (child indexes from the window, dot-separated; "" for the window), role, subrole,
-/// title, description, identifier, value (strings cut to `maxValue` characters unless it is 0, with `value_truncated`),
+/// title, description, identifier, value (strings cut to `maxValue` characters unless it is 0, with `value_truncated`;
+/// a secure text field and everything inside it get `secure: true` and no value; pass `insideSecure` when `element`
+/// has a secure ancestor),
 /// frame (x, y, width, height) and actions, then its children for `depth` more levels. Missing and empty attributes are
 /// left out. When `depth` stops the walk, an element with children gets `children_omitted` (their number) instead of `children`.
-func treeNode(_ element: AXUIElement, path: String = "", depth: Int, maxValue: Int) -> [String: Any] {
+func treeNode(_ element: AXUIElement, path: String = "", depth: Int, maxValue: Int, insideSecure: Bool = false) -> [String: Any] {
     var valuesRef: CFArray?
     AXUIElementCopyMultipleAttributeValues(element, treeAttributes as CFArray, [], &valuesRef)
     // The values come back in treeAttributes order.
@@ -2237,7 +2269,11 @@ func treeNode(_ element: AXUIElement, path: String = "", depth: Int, maxValue: I
                         ("description", kAXDescriptionAttribute), ("identifier", kAXIdentifierAttribute)] {
         if let string = attributes[name] as? String, !string.isEmpty { node[key] = string }
     }
-    if let value = attributes[kAXValueAttribute].flatMap(treeValue) {
+    // The batch read fetched a secure field's value too; it is dropped here and never stored or printed.
+    let secure = insideSecure || isSecureText(role: node["role"] as? String, subrole: node["subrole"] as? String)
+    if secure {
+        node["secure"] = true
+    } else if let value = attributes[kAXValueAttribute].flatMap(treeValue) {
         if let string = value as? String, maxValue > 0, string.count > maxValue {
             node["value"] = String(string.prefix(maxValue))
             node["value_truncated"] = true
@@ -2260,7 +2296,7 @@ func treeNode(_ element: AXUIElement, path: String = "", depth: Int, maxValue: I
     if !children.isEmpty {
         if depth > 0 {
             node["children"] = children.enumerated().map { index, child in
-                treeNode(child, path: path.isEmpty ? "\(index)" : "\(path).\(index)", depth: depth - 1, maxValue: maxValue)
+                treeNode(child, path: path.isEmpty ? "\(index)" : "\(path).\(index)", depth: depth - 1, maxValue: maxValue, insideSecure: secure)
             }
         } else {
             node["children_omitted"] = children.count
@@ -2269,18 +2305,22 @@ func treeNode(_ element: AXUIElement, path: String = "", depth: Int, maxValue: I
     return node
 }
 
-/// Escapes a string for one line of `tree` text output: backslash, quote, every control character, and U+2028/U+2029,
-/// so a value cannot break the line or send terminal escape sequences.
-func treeEscape(_ string: String) -> String {
+/// Escapes a string for one line of text output, shared by `tree` and `text`: backslash, quote, every control character,
+/// U+2028/U+2029 and the bidi embedding, override and isolate controls, so a value cannot break the line, send terminal escape sequences or
+/// reorder the rest of the line. `text` passes `quotes: false`, as it prints values unquoted, and for `--raw` `raw: true`,
+/// which keeps line breaks, tabs, quotes and backslashes as they are.
+func treeEscape(_ string: String, quotes: Bool = true, raw: Bool = false) -> String {
     var escaped = ""
     for scalar in string.unicodeScalars {
         switch scalar {
+        case "\n" where raw, "\t" where raw, "\\" where raw, "\"" where raw: escaped.unicodeScalars.append(scalar)
         case "\\": escaped += "\\\\"
-        case "\"": escaped += "\\\""
+        case "\"" where quotes: escaped += "\\\""
         case "\n": escaped += "\\n"
         case "\r": escaped += "\\r"
         case "\t": escaped += "\\t"
-        case _ where scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value) || scalar.value == 0x2028 || scalar.value == 0x2029:
+        case _ where scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value) || (0x2028...0x202E).contains(scalar.value) ||
+                    (0x2066...0x2069).contains(scalar.value):
             escaped += "\\u{\(String(scalar.value, radix: 16))}"
         default: escaped.unicodeScalars.append(scalar)
         }
@@ -2303,7 +2343,7 @@ func treeDisplayAction(_ action: String) -> String {
 /// with its `[path]`. The root may carry `window_id` (added by `treeCommand`). Returns whether any element had children cut off by --depth.
 @discardableResult
 func printTreeNode(_ node: [String: Any], level: Int = 0) -> Bool {
-    var parts = [[node["role"], node["subrole"]].compactMap { ($0 as? String).map(treeEscape) }.joined(separator: ":")]
+    var parts = [[node["role"], node["subrole"]].compactMap { ($0 as? String).map { treeEscape($0) } }.joined(separator: ":")]
     if parts[0].isEmpty { parts[0] = "(no role)" }
     if let path = node["path"] as? String, !path.isEmpty { parts[0] = "[\(path)] " + parts[0] }
     if let windowID = node["window_id"] { parts.append("window_id=\(windowID)") }
@@ -2315,6 +2355,7 @@ func printTreeNode(_ node: [String: Any], level: Int = 0) -> Bool {
         let truncated = node["value_truncated"] as? Bool == true
         parts.append("value=" + ((value as? String).map { treeDisplayString(truncated ? $0 + "…" : $0) } ?? "\(value)"))
     }
+    if node["secure"] as? Bool == true { parts.append("secure") }
     if let x = node["x"], let y = node["y"], let width = node["width"], let height = node["height"] {
         parts.append("frame=\(x),\(y) \(width)x\(height)")
     }
@@ -2343,6 +2384,139 @@ func treeCommand(bundleId: String, selector: WindowSelector, depth: Int, maxValu
     } else if printTreeNode(root) {
         fflush(stdout)
         fputs("Some elements have children_omitted: raise --depth to show them.\n", stderr)
+    }
+}
+
+// MARK: - Element Paths
+
+// A path addresses one element by its child indexes from the window, as `tree` prints it ("0.2.1"; "" is the window).
+// These helpers are shared by every command that takes a path: `text --path`, and the planned `press`.
+
+/// Reads an AX attribute that holds an element (a parent, the focused element), or nil.
+func axElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success, let ref,
+          CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
+    return (ref as! AXUIElement)
+}
+
+/// An element's children in `kAXChildrenAttribute` order, the order `tree` numbers them in. `treeNode` reads the same
+/// attribute in its one batch call per element instead, so it does not use this.
+func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+    var ref: CFTypeRef?
+    AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &ref)
+    return ref as? [AXUIElement] ?? []
+}
+
+/// The element at a `tree` path in `window`. Throws `invalidValue` for a malformed path (only canonical whole numbers,
+/// so `01` and `+1` fail) and `noElementAtPath` for an index past the end. `insideSecure` is true when an element above
+/// the target (not the target itself) is a secure text field, for `treeNode`'s `insideSecure`.
+func elementAtPath(_ path: String, in window: WindowInfo) throws -> (element: AXUIElement, insideSecure: Bool) {
+    var element = window.element
+    var insideSecure = false
+    var walked: [Substring] = []
+    for component in path.isEmpty ? [] : path.split(separator: ".", omittingEmptySubsequences: false) {
+        guard let index = Int(component), index >= 0, String(index) == component else {
+            throw WindowToolError.invalidValue(name: "--path", expected: "child indexes joined with '.' as 'tree' prints them, such as 0.2.1 (\"\" for the window)", got: path)
+        }
+        let children = axChildren(element)
+        guard index < children.count else {
+            throw WindowToolError.noElementAtPath(path: path, parent: walked.joined(separator: "."), count: children.count, windowID: window.windowID)
+        }
+        insideSecure = insideSecure || isSecureElement(element)
+        element = children[index]
+        walked.append(component)
+    }
+    return (element, insideSecure)
+}
+
+/// The `tree` path of `element` in `window`, found by walking up its parents, or nil when that walk does not reach the
+/// window. `insideSecure` is true when one of those parents is a secure text field, as in `elementAtPath`.
+func pathOfElement(_ element: AXUIElement, in window: AXUIElement) -> (path: String, insideSecure: Bool)? {
+    var indexes: [Int] = []
+    var insideSecure = false
+    var current = element
+    while !CFEqual(current, window) {
+        guard indexes.count < maxTreeDepth, let parent = axElement(current, kAXParentAttribute),
+              let index = axChildren(parent).firstIndex(where: { CFEqual($0, current) }) else { return nil }
+        indexes.insert(index, at: 0)
+        current = parent
+        insideSecure = insideSecure || isSecureElement(parent)
+    }
+    return (indexes.map(String.init).joined(separator: "."), insideSecure)
+}
+
+// MARK: - Text Command
+
+/// Roles whose value is text in the window: labels and text inputs. Secure text fields never count (see `isSecureText`).
+let textRoles: Set<String> = [kAXStaticTextRole, kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
+
+/// The string values of a `treeNode` and its descendants that have a text role, in tree order, as `path`/`role`/`value`
+/// objects (plus `value_truncated`). An element whose frame is empty or does not overlap `frame` (the window's) is left
+/// out, but its children are still read. Secure nodes, which `treeNode` marks along with all their descendants, are skipped.
+func visibleTexts(_ node: [String: Any], in frame: CGRect) -> [[String: Any]] {
+    if node["secure"] as? Bool == true { return [] }
+    var texts: [[String: Any]] = []
+    if let role = node["role"] as? String, textRoles.contains(role), let value = node["value"] as? String {
+        var inside = true
+        if let x = node["x"] as? Int, let y = node["y"] as? Int, let width = node["width"] as? Int, let height = node["height"] as? Int {
+            inside = width > 0 && height > 0 && CGRect(x: x, y: y, width: width, height: height).intersects(frame)
+        }
+        if inside {
+            var text: [String: Any] = ["path": node["path"] ?? "", "role": role, "value": value]
+            if node["value_truncated"] != nil { text["value_truncated"] = true }
+            texts.append(text)
+        }
+    }
+    return texts + (node["children"] as? [[String: Any]] ?? []).flatMap { visibleTexts($0, in: frame) }
+}
+
+/// The app's focused element as `path`, `role`, `value` (a string, number or boolean, cut to `maxValue`), `value_truncated`
+/// and `secure`, when it is in `window` at or below `path`, or nil. Keyboard focus belongs to the app, not the window,
+/// so when another window of the same app holds it this returns nil. The node comes from `treeNode`, so a secure
+/// text field, or any element inside one, gets `secure: true` and no value.
+func focusedElementJSON(in window: AXUIElement, under path: String, maxValue: Int) -> [String: Any]? {
+    var pid: pid_t = 0
+    guard AXUIElementGetPid(window, &pid) == .success,
+          let element = axElement(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute),
+          let (focusedPath, insideSecure) = pathOfElement(element, in: window),
+          path.isEmpty || focusedPath == path || focusedPath.hasPrefix(path + ".") else { return nil }
+    return treeNode(element, path: focusedPath, depth: 0, maxValue: maxValue, insideSecure: insideSecure)
+        .filter { ["path", "role", "value", "value_truncated", "secure"].contains($0.key) }
+}
+
+/// A value for `text` output: escaped onto one line, or with `raw` only terminal controls escaped; "…" when cut by `--max-value`.
+func textLine(_ value: Any, truncated: Bool, raw: Bool) -> String {
+    guard let string = value as? String else { return "\(value)" }
+    return treeEscape(truncated ? string + "…" : string, quotes: false, raw: raw)
+}
+
+/// Prints the text inside a window: the values of its labels and text inputs whose frames overlap the window's, at or
+/// below `path`, one per line, and under `--json` also the focused element. With `focusedOnly`, prints only the focused
+/// element's value (nothing when it has none, such as a secure field) and throws `noFocusedElement` when the window
+/// (or `path`) holds no keyboard focus.
+func textCommand(bundleId: String, selector: WindowSelector, path: String, focusedOnly: Bool, raw: Bool, maxValue: Int) throws {
+    let w = try resolveWindow(bundleId: bundleId, selector: selector)
+    let (start, insideSecure) = try elementAtPath(path, in: w)
+    let focused = focusedOnly || config.jsonOutput ? focusedElementJSON(in: w.element, under: path, maxValue: maxValue) : nil
+    if focusedOnly {
+        guard let focused else { throw WindowToolError.noFocusedElement(windowID: w.windowID, path: path) }
+        if config.jsonOutput {
+            printJSON(focused)
+        } else if let value = focused["value"] {
+            print(textLine(value, truncated: focused["value_truncated"] != nil, raw: raw))
+        }
+        return
+    }
+    let texts = visibleTexts(treeNode(start, path: path, depth: maxTreeDepth, maxValue: maxValue, insideSecure: insideSecure), in: CGRect(origin: w.position, size: w.size))
+    if config.jsonOutput {
+        var result: [String: Any] = ["path": path, "texts": texts, "focused": focused ?? NSNull()]
+        if let windowID = w.windowID { result["window_id"] = Int(windowID) }
+        printJSON(result)
+    } else {
+        for text in texts {
+            print(textLine(text["value"] ?? "", truncated: text["value_truncated"] != nil, raw: raw))
+        }
     }
 }
 
@@ -3684,6 +3858,12 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Print a window's accessibility element tree: role, title, value, frame and actions",
                 flags: [("--depth N", "Levels below the window to show, 0 to 100 (default: 10); web content can print thousands of lines, so lower it there"),
                         ("--max-value N", "Cut string values to N characters, 0 for no limit (default: 200); --json marks a cut value with value_truncated")]),
+    CommandSpec(name: "text", group: .query, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Print the text inside a window: label and text field values, one per line, escaped (--raw for readable text, --json for exact strings)",
+                flags: [("--path <path>", "Read only the element at this path from 'tree' and its descendants, such as 0.2.1 (\"\" is the whole window, the default)"),
+                        ("--focused", "Print only the value of the element with keyboard focus; --json prints just that element's object (exit 4 when nothing in the window has keyboard focus)"),
+                        ("--raw", "Print line breaks and tabs inside values as they are (other control characters stay escaped)"),
+                        ("--max-value N", "Cut values to N characters, 0 for no limit (default: 0); a cut value ends in … and --json marks it with value_truncated")]),
     CommandSpec(name: "count", group: .query, app: .required, mutates: false,
                 summary: "Print the number of windows for --app"),
     CommandSpec(name: "active-window", group: .query, app: .none, mutates: false,
@@ -4100,6 +4280,13 @@ func runCommand(_ args: [String]) throws {
         let depth = try takeOption("--depth", from: &rest).map { try parseNonNegativeInt($0, label: "--depth", max: maxTreeDepth) } ?? 10
         let maxValue = try takeOption("--max-value", from: &rest).map { try parseNonNegativeInt($0, label: "--max-value") } ?? 200
         try treeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector, depth: depth, maxValue: maxValue)
+    case "text":
+        let path = try takeOption("--path", from: &rest) ?? ""
+        let focusedOnly = takeFlag("--focused", from: &rest)
+        let raw = takeFlag("--raw", from: &rest)
+        let maxValue = try takeOption("--max-value", from: &rest).map { try parseNonNegativeInt($0, label: "--max-value") } ?? 0
+        try textCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector, path: path,
+                        focusedOnly: focusedOnly, raw: raw, maxValue: maxValue)
     case "columnize":
         let gap = try takeOption("--gap", from: &rest).map { try parseInt($0, label: "gap") } ?? 10
         try rejectUnknownOptions(rest, command: command)

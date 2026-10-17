@@ -88,6 +88,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `snap` | [README](docs/README.snap.md) | Snap a window to a screen region, thirds, or a fractional `--rect` |
 | `stack` | [README](docs/README.stack.md) | Cascade all or selected windows with an offset |
 | `tile` | [README](docs/README.tile.md) | Tile windows in a grid layout |
+| `text` | [README](docs/README.text.md) | Print the text inside a window: label and text field values, never passwords (`--path P`, `--focused`, `--raw`, `--max-value N`) |
 | `tree` | [README](docs/README.tree.md) | Print a window's accessibility element tree: role, title, value, frame and actions, with a path per element (`--depth N`, `--max-value N`) |
 | `unborder` | [README](docs/README.unborder.md) | Remove border overlays for an app |
 | `unborder-all` | [README](docs/README.unborder-all.md) | Remove all active borders |
@@ -170,7 +171,7 @@ $ window-tool --json --app Finder info 99
 | 1 | Other failure | `operation_failed`, `nothing_to_undo`, `file_not_found` |
 | 2 | Usage error: fix the command line | `unknown_command`, `unknown_option`, `repeated_option`, `unexpected_argument`, `option_needs_value`, `option_takes_no_value`, `option_required`, `missing_arguments`, `missing_window_selector`, `invalid_value`, `unknown_choice`, `app_required`, `screen_index_out_of_range` |
 | 3 | `--app` matched no running app, or more than one | `app_not_found`, `ambiguous_app` |
-| 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
+| 4 | Window or element not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window`, `no_element_at_path`, `no_focused_element` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 | 6 | `close` was blocked by an unsaved-changes prompt | `unsaved_changes` |
 | 7 | `wait`, or `watch --once` with `--timeout`, timed out | `timeout` |

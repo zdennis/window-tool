@@ -34,6 +34,7 @@ The window is the root. Each element has these keys. Apart from `path` and `acti
 | `identifier` | The developer-assigned `AXIdentifier`, stable across launches when the app sets it |
 | `value` | A string, number or boolean value (text field contents, checkbox state); other kinds of value are left out |
 | `value_truncated` | `true` when `value` was cut to `--max-value` characters |
+| `secure` | `true` for a password field (role or subrole `AXSecureTextField`) and for every element inside one; their `value` is never shown |
 | `x`, `y`, `width`, `height` | The element's frame in screen points, top-left origin, the same coordinates as `info` |
 | `actions` | Action names such as `AXPress` and `AXShowMenu`. Always an array, empty when there are none. |
 | `children` | Child elements, in the app's order |
@@ -42,13 +43,13 @@ The window is the root. Each element has these keys. Apart from `path` and `acti
 
 An element without `children` is a leaf, or was cut off by `--depth`; check `children_omitted` to tell which.
 
-A path is valid only until the window's UI changes: opening a tab or a menu, or a list scrolling, can shift the indexes. Read the tree again before using an old path. The planned `press` command will take a path as `--path 0.2.1`.
+A path is valid only until the window's UI changes: opening a tab or a menu, or a list scrolling, can shift the indexes. Read the tree again before using an old path. `text --path 0.2.1` reads the text at and below one element; the planned `press` command will take a path the same way.
 
 AppKit custom actions are reported as `Name:<name>\nTarget:<pointer>\nSelector:<selector>`. `--json` keeps the full string, which is the name to use when performing the action; the pointer changes between launches. Text output shows only the name.
 
 `--json` prints the root element as one nested JSON object; it is the form to parse. In a chain it is the command's `data` (`jq '.results[]'`).
 
-Text output prints one line per element, indented two spaces per level. Each line except the window's starts with the element's `[path]`, then `role:subrole`, `window_id` (window only), `title`, `description`, `identifier`, `value`, `frame` and `actions`, and `children_omitted` when `--depth` stopped there. Strings are quoted and cut to 80 characters; line breaks, quotes and control characters are escaped. When any element has `children_omitted`, a hint to raise `--depth` goes to stderr.
+Text output prints one line per element, indented two spaces per level. Each line except the window's starts with the element's `[path]`, then `role:subrole`, `window_id` (window only), `title`, `description`, `identifier`, `value`, `secure` (password fields), `frame` and `actions`, and `children_omitted` when `--depth` stopped there. Strings are quoted and cut to 80 characters; line breaks, quotes, control characters and bidi embedding, override and isolate controls are escaped. When any element has `children_omitted`, a hint to raise `--depth` goes to stderr.
 
 ```text
 AXWindow:AXStandardWindow  window_id=420  title="Untitled"  frame=889,126 759x974  actions=AXRaise
