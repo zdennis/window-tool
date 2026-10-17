@@ -74,6 +74,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `move-to-screen` | [README](docs/README.move-to-screen.md) | Move a window to a different display |
 | `pick` | [README](docs/README.pick.md) | Click a window to print its ID |
 | `preview` | [README](docs/README.preview.md) | Capture a window screenshot as PNG |
+| `quit` | [README](docs/README.quit.md) | Quit an app and wait until it has exited |
 | `record` | [README](docs/README.record.md) | Record video of a window |
 | `resize` | [README](docs/README.resize.md) | Resize a window |
 | `restore` | [README](docs/README.restore.md) | Restore minimized windows, or one window |

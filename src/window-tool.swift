@@ -2034,6 +2034,27 @@ func closeCommand(bundleId: String, selector: WindowSelector?) throws {
     printStatus("Closed \(windows.count) window(s)")
 }
 
+/// Asks every running instance of the app to quit (`terminate`, or `forceTerminate` with `force`) and waits up to
+/// 5 seconds for it to exit. Throws `operationFailed` when it is still running, as when it is asking about unsaved changes.
+func quitCommand(bundleId: String, force: Bool) throws {
+    guard !bundleId.isEmpty else { throw WindowToolError.appRequired(hint: "quit closes one app.") }
+    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+    guard let name = apps.first?.localizedName ?? apps.first?.bundleIdentifier else { throw WindowToolError.appNotFound(bundleId) }
+    for app in apps { _ = force ? app.forceTerminate() : app.terminate() }
+    let deadline = Date().addingTimeInterval(5)
+    while apps.contains(where: { !$0.isTerminated }) && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    guard apps.allSatisfy(\.isTerminated) else {
+        throw WindowToolError.operationFailed("'\(name)' is still running after the quit request" + (force ? "." : "; it may be asking about unsaved changes. Answer it in the app, or use --force to discard them."))
+    }
+    if config.jsonOutput {
+        printJSON(["quit": true, "app": name, "bundle_id": bundleId, "forced": force] as [String: Any])
+    } else {
+        print("Quit \(name)")
+    }
+}
+
 /// Restores (unminimizes) the selected window, or every minimized window of the application when no selector is given.
 func restoreCommand(bundleId: String, selector: WindowSelector?) throws {
     let windows: [AXUIElement]
@@ -3073,6 +3094,10 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "close", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> | --all",
                 summary: "Close a window, or every window of --app with --all",
                 flags: [("--all", "Close every window of --app instead of one window")]),
+    // `mutates` means "prints a window list under --json"; quit prints its own result instead, so it stays false although it is destructive.
+    CommandSpec(name: "quit", group: .moveSize, app: .required, mutates: false,
+                summary: "Quit --app and wait until it has exited",
+                flags: [("--force", "Force-terminate the app; unsaved changes are lost")], needsAccessibility: false),
     CommandSpec(name: "restore", group: .moveSize, app: .optional, mutates: true, synopsis: "[<window>]",
                 summary: "Restore minimized windows: all for --app, or just <window>"),
     CommandSpec(name: "fullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
@@ -3497,6 +3522,10 @@ func runCommand(_ args: [String]) throws {
         } else {
             try closeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
         }
+    case "quit":
+        let force = takeFlag("--force", from: &rest)
+        try checkArgs(rest, command: command)
+        try quitCommand(bundleId: config.bundleId, force: force)
     case "restore":
         let selector = rest.isEmpty ? nil : try resolveSelectorAndArgs(rest, command: command).selector
         try restoreCommand(bundleId: config.bundleId, selector: selector)
