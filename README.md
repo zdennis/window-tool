@@ -38,7 +38,7 @@ window-tool [--app <name-or-id>] <command> [args...]
 window-tool help [<command>]
 ```
 
-Run `window-tool help` for every command grouped by purpose, and `window-tool help <command>` or `window-tool <command> --help` for one command's arguments and options.
+Run `window-tool help` for every command grouped by purpose, and `window-tool help <command>` or `window-tool <command> --help` for one command's arguments and options. `window-tool --json commands` prints the same table as JSON.
 
 Use `--app` to target a specific application by name or bundle ID. `--app` is required whenever you select a window by index or `title=`; there is no frontmost-app default. With `id=<N>` selectors, `--app` is optional because the owning app is detected automatically.
 
@@ -53,6 +53,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `border` | [README](docs/README.border.md) | Add a persistent border that tracks a window |
 | `center` | [README](docs/README.center.md) | Center a window on screen, optionally resizing |
 | `columnize` | [README](docs/README.columnize.md) | Arrange windows side-by-side in columns |
+| `commands` | [README](docs/README.commands.md) | List every command; with `--json`, its arguments, options and whether it mutates |
 | `count` | [README](docs/README.count.md) | Print number of windows |
 | `dim` | [README](docs/README.dim.md) | Dim everything except a window |
 | `flash` | [README](docs/README.flash.md) | Flash a colored overlay on a window |

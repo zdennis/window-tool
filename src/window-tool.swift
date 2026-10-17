@@ -2526,7 +2526,8 @@ enum AppUsage {
 }
 
 /// One command's help. `synopsis` lists positional arguments only; " [options]" is added when `flags` is non-empty.
-/// `mutates` is true when the command changes a window's position, size, state or focus (for `commands --json`, WT22).
+/// `mutates` is true when the command changes a window's position, size, state or focus.
+/// `needsAccessibility` and `resolvesOwnApp` drive `runCommand`'s up-front checks; `commands --json` reports them.
 struct CommandSpec {
     let name: String
     let group: CommandGroup
@@ -2536,6 +2537,9 @@ struct CommandSpec {
     let summary: String
     var arguments: [(name: String, description: String)] = []
     var flags: [(name: String, description: String)] = []
+    var needsAccessibility = true
+    /// True when the command resolves `--app` itself (it is optional and absent means "all apps").
+    var resolvesOwnApp = false
 
     var usageLine: String {
         let appPrefix: String
@@ -2546,6 +2550,19 @@ struct CommandSpec {
         }
         let parts = [name, synopsis, flags.isEmpty ? "" : "[options]"].filter { !$0.isEmpty }
         return "window-tool \(appPrefix)\(parts.joined(separator: " "))"
+    }
+
+    var json: [String: Any] {
+        let appValue: String
+        switch app {
+        case .required: appValue = "required"
+        case .optional: appValue = "optional"
+        case .none: appValue = "none"
+        }
+        let describe = { (rows: [(name: String, description: String)]) in rows.map { ["name": $0.name, "description": $0.description] } }
+        return ["name": name, "group": group.rawValue, "app": appValue, "mutates": mutates,
+                "accessibility": needsAccessibility, "synopsis": synopsis, "summary": summary,
+                "arguments": describe(arguments), "flags": describe(flags)]
     }
 
     var help: String {
@@ -2571,10 +2588,10 @@ func helpRows(_ rows: [(name: String, description: String)], width: Int? = nil) 
 }
 
 /// Every command, in the order the top-level help lists them within each group.
-/// Each `runCommand` case needs a spec here, or `help <command>` and its usage errors cannot find it.
+/// Each `runCommand` case needs a spec here (a command without one skips the Accessibility check), or `help <command>` and its usage errors cannot find it.
 let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "list", group: .query, app: .optional, mutates: false,
-                summary: "List windows (all apps, or one app with --app)"),
+                summary: "List windows (all apps, or one app with --app)", resolvesOwnApp: true),
     CommandSpec(name: "info", group: .query, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Show detailed info for a window"),
     CommandSpec(name: "count", group: .query, app: .required, mutates: false,
@@ -2583,11 +2600,11 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Print info about the frontmost app's primary window",
                 flags: [("--id", "Print only the window ID")]),
     CommandSpec(name: "active-screen", group: .query, app: .none, mutates: false,
-                summary: "Print the active screen's usable bounds (x, y, width, height)"),
+                summary: "Print the active screen's usable bounds (x, y, width, height)", needsAccessibility: false),
     CommandSpec(name: "screens", group: .query, app: .none, mutates: false,
-                summary: "List all displays with bounds"),
+                summary: "List all displays with bounds", needsAccessibility: false),
     CommandSpec(name: "pick", group: .query, app: .none, mutates: false,
-                summary: "Click a window to print its ID (blocks until you click)"),
+                summary: "Click a window to print its ID (blocks until you click)", needsAccessibility: false),
     CommandSpec(name: "watch", group: .query, app: .required, mutates: false, synopsis: "[interval]",
                 summary: "Print window changes for --app until interrupted",
                 arguments: [("[interval]", "Poll interval in seconds, greater than 0 (default: 1.0)")]),
@@ -2660,17 +2677,17 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Remove borders for --app, or for one window",
                 arguments: [("[<window>]", "Window whose border to remove; without it, --app is required")]),
     CommandSpec(name: "unborder-all", group: .overlays, app: .none, mutates: false,
-                summary: "Remove all active borders"),
+                summary: "Remove all active borders", needsAccessibility: false),
     CommandSpec(name: "dim", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Dim everything except a window",
                 flags: [("--opacity <value>", "Overlay opacity, 0.0-1.0 (default: 0.5)"),
                         ("--duration <seconds>", "Dismiss after this long; 0 stays until 'undim' (default: 0)")]),
     CommandSpec(name: "undim", group: .overlays, app: .none, mutates: false,
-                summary: "Remove the active dim overlay"),
+                summary: "Remove the active dim overlay", needsAccessibility: false),
     CommandSpec(name: "identify", group: .overlays, app: .optional, mutates: false,
                 summary: "Label visible windows with their IDs (blocks until they dismiss)",
                 flags: [("--color <color>", "Label color (default: magenta)"),
-                        ("--duration <seconds>", "How long to show the labels (default: 3)")]),
+                        ("--duration <seconds>", "How long to show the labels (default: 3)")], resolvesOwnApp: true),
     CommandSpec(name: "shake", group: .overlays, app: .optional, mutates: true, synopsis: "<window> [offset] [count] [delay]",
                 summary: "Shake a window to draw attention to it",
                 arguments: [("[offset]", "Shake distance in pixels (default: 12)"),
@@ -2689,11 +2706,24 @@ let commandSpecs: [CommandSpec] = [
                         ("--no-border", "Don't show a border while recording")]),
 
     CommandSpec(name: "help", group: .meta, app: .none, mutates: false, synopsis: "[<command>]",
-                summary: "Show all commands, or one command's arguments and options"),
+                summary: "Show all commands, or one command's arguments and options", needsAccessibility: false),
+    CommandSpec(name: "commands", group: .meta, app: .none, mutates: false,
+                summary: "List every command; with --json, its arguments, options, --app usage and whether it mutates",
+                needsAccessibility: false),
     CommandSpec(name: "shell-init", group: .meta, app: .none, mutates: false, synopsis: "<shell>",
                 summary: "Print a shell integration snippet",
-                arguments: [("<shell>", "zsh, bash or fish")]),
+                arguments: [("<shell>", "zsh, bash or fish")], needsAccessibility: false),
 ]
+
+/// Prints the command list: names and summaries, or with --json the full table plus the valid values for enum-like arguments.
+func commandsCommand() {
+    if config.jsonOutput {
+        printJSON(["version": VERSION, "commands": commandSpecs.map(\.json),
+                   "enums": ["snapPositions": SnapPosition.allCases.map(\.rawValue), "colors": validColors, "shells": ["zsh", "bash", "fish"]]] as [String: Any])
+    } else {
+        print(helpRows(commandSpecs.map { (name: $0.name, description: $0.summary) }).joined(separator: "\n"))
+    }
+}
 
 func commandSpec(named name: String) -> CommandSpec? {
     commandSpecs.first { $0.name == name }
@@ -2812,21 +2842,6 @@ if args.first == "--version" || args.first == "-v" {
     exit(0)
 }
 
-// Commands that need Accessibility access
-let accessibilityCommands: Set<String> = [
-    "list", "info", "count", "center", "columnize", "tile",
-    "move", "resize", "snap", "move-to-screen",
-    "maximize", "minimize", "restore", "sidebar",
-    "save-layout", "restore-layout", "stack", "watch",
-    "fullscreen", "unfullscreen",
-    "focus", "flash", "shake",
-    "highlight", "identify", "border", "unborder",
-    "dim", "preview", "record",
-    "active-window"
-]
-// Commands that don't use --app (they enumerate all apps or don't need one)
-let appIndependentCommands: Set<String> = ["list", "identify", "pick", "screens", "active-screen", "active-window", "shell-init", "undim", "unborder-all", "help", "--help", "-h"]
-
 // Split args on "+" to support chaining multiple commands
 func splitCommands(_ args: [String]) -> [[String]] {
     var commands: [[String]] = []
@@ -2851,11 +2866,13 @@ let commandGroups = helpTarget.map { [["help", $0[0]]] } ?? splitGroups
 func runCommand(_ args: [String]) throws {
     let command = args[0]
 
-    if accessibilityCommands.contains(command) {
+    let spec = commandSpec(named: command == "--help" || command == "-h" ? "help" : command)
+    if spec?.needsAccessibility == true {
         try checkAccessibility()
     }
 
-    if !appIndependentCommands.contains(command) && !config.bundleId.isEmpty {
+    let appIndependent = spec.map { $0.app == .none || $0.resolvesOwnApp } ?? false
+    if !appIndependent && !config.bundleId.isEmpty {
         config.bundleId = try resolveAppIdentifier(config.bundleId)
     }
 
@@ -3041,6 +3058,8 @@ func runCommand(_ args: [String]) throws {
             throw WindowToolError.missingArguments(command: "shell-init")
         }
         try shellInitCommand(shell: args[1])
+    case "commands":
+        commandsCommand()
     case "help", "--help", "-h":
         guard args.count >= 2 else {
             usage()
