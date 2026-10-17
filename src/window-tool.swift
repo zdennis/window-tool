@@ -11,10 +11,16 @@ struct Config {
     var bundleId: String = ""
     var appExplicit: Bool = false
     var jsonOutput: Bool = false
-    var jsonBuffer: [Any] = []
+    var keepGoing: Bool = false
     var jsonChaining: Bool = false
     var chaining: Bool = false
     var lastSelector: WindowSelector?
+    /// Under `--json` in a chain: the entries for the `{"results", "failed_at"}` envelope, the 1-based
+    /// number of the first failed command, and the running command with the JSON it has printed so far.
+    var chainResults: [[String: Any]] = []
+    var chainFailedAt: Int?
+    var runningCommand: String?
+    var commandOutput: [Any] = []
 }
 
 var config = Config()
@@ -28,23 +34,8 @@ func printStatus(_ message: String) {
     }
 }
 
-func printJSON(_ value: Any) {
-    if config.jsonChaining {
-        config.jsonBuffer.append(value)
-    } else {
-        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
-              let str = String(data: data, encoding: .utf8) else {
-            fputs("Error: Failed to serialize JSON output\n", stderr)
-            exit(1)
-        }
-        print(str)
-    }
-}
-
-func flushJSONBuffer() {
-    guard !config.jsonBuffer.isEmpty else { return }
-    let output = config.jsonBuffer.count == 1 ? config.jsonBuffer[0] : config.jsonBuffer
-    guard let data = try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys]),
+func writeJSON(_ value: Any) {
+    guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
           let str = String(data: data, encoding: .utf8) else {
         fputs("Error: Failed to serialize JSON output\n", stderr)
         exit(1)
@@ -52,7 +43,41 @@ func flushJSONBuffer() {
     print(str)
 }
 
-/// Exits without losing JSON results buffered by earlier commands in a chain.
+/// Prints a command's JSON result; in a chain it is held for the command's entry in the results envelope.
+func printJSON(_ value: Any) {
+    if config.jsonChaining {
+        config.commandOutput.append(value)
+    } else {
+        writeJSON(value)
+    }
+}
+
+/// Under `--json` in a chain, closes the running command's entry: `data` is what it printed (null for
+/// nothing, an array when it printed more than once), or `error` is the given error object.
+func recordChainResult(error: [String: Any]? = nil) {
+    guard config.jsonChaining, let command = config.runningCommand else { return }
+    var entry: [String: Any] = ["command": command, "ok": error == nil]
+    if let error {
+        entry["error"] = error
+        config.chainFailedAt = config.chainFailedAt ?? config.chainResults.count + 1
+    } else {
+        let output = config.commandOutput
+        entry["data"] = output.isEmpty ? NSNull() : output.count == 1 ? output[0] : output
+    }
+    config.chainResults.append(entry)
+    config.runningCommand = nil
+    config.commandOutput = []
+}
+
+/// Under `--json` in a chain, prints the `{"results", "failed_at"}` envelope. A command that exits
+/// from a callback (pick, record, watch) has its entry closed here.
+func flushJSONBuffer() {
+    guard config.jsonChaining else { return }
+    recordChainResult()
+    writeJSON(["results": config.chainResults, "failed_at": config.chainFailedAt ?? NSNull()] as [String: Any])
+}
+
+/// Exits after printing a chain's results envelope, so no buffered JSON is lost.
 /// Commands throw WindowToolError; callbacks and signal handlers that can't throw report errors
 /// with exitWithError and successes with this.
 func flushJSONAndExit(_ status: Int32) -> Never {
@@ -235,17 +260,28 @@ enum WindowToolError: LocalizedError {
     }
 }
 
-/// Reports an error and exits with its code. The message goes to stderr; under `--json` the
-/// `{"error": {"code", "message", "details"}}` object also goes to stdout, after any results
-/// buffered by earlier commands in a chain. Errors from system frameworks report as `operation_failed`.
-func exitWithError(_ error: Error, prefix: String = "Error") -> Never {
+/// Reports an error without exiting. The message goes to stderr; under `--json` the
+/// `{"code", "message", "details"}` object goes to stdout as `{"error": …}`, or in a chain becomes
+/// the running command's entry in the results envelope. Errors from system frameworks report as `operation_failed`.
+@discardableResult
+func reportError(_ error: Error, prefix: String = "Error") -> WindowToolError {
     let toolError = error as? WindowToolError ?? .operationFailed(error.localizedDescription)
     let message = toolError.localizedDescription
     fputs("\(prefix): \(message)\n", stderr)
     if config.jsonOutput {
-        printJSON(["error": ["code": toolError.code, "message": message, "details": toolError.details]])
+        let object: [String: Any] = ["code": toolError.code, "message": message, "details": toolError.details]
+        if config.jsonChaining {
+            recordChainResult(error: object)
+        } else {
+            printJSON(["error": object])
+        }
     }
-    flushJSONAndExit(toolError.exitCode)
+    return toolError
+}
+
+/// Reports an error and exits with its code.
+func exitWithError(_ error: Error, prefix: String = "Error") -> Never {
+    flushJSONAndExit(reportError(error, prefix: prefix).exitCode)
 }
 
 // MARK: - Argument Parsing Helpers
@@ -2839,7 +2875,7 @@ func usage() {
     }
     let width = entries.map(\.name.count).max() ?? 0
     var lines = [
-        "Usage: window-tool [--app <name-or-id>] [--json] <command> [args...]",
+        "Usage: window-tool [--app <name-or-id>] [--json] [--keep-going] <command> [args...]",
         "       window-tool help <command>        Show one command's arguments and options",
     ]
     for group in CommandGroup.allCases {
@@ -2864,6 +2900,7 @@ func usage() {
     Options:
       --app <name-or-id>  Target application by name or bundle ID
       --json              Output in JSON format
+      --keep-going        In a chain, run the remaining commands after one fails
       --help, -h          Show help; after a command, show that command's help
       --version, -v       Print version and exit
       Options that take a value accept --flag value or --flag=value.
@@ -2875,9 +2912,9 @@ func usage() {
 
     Errors and exit codes:
       With --json, an error also prints {"error": {"code", "message", "details"}}
-      to stdout. Exit codes: 0 success, 1 other failure, 2 usage error,
-      3 app not found or ambiguous, 4 window not found, 5 permission not granted
-      (Accessibility, or Screen Recording for record).
+      to stdout (in a chain, the failed command's "error"). Exit codes: 0 success,
+      1 other failure, 2 usage error, 3 app not found or ambiguous, 4 window not
+      found, 5 permission not granted (Accessibility, or Screen Recording for record).
 
     Command chaining:
       Use + to run multiple commands in sequence, sharing --app and --json flags.
@@ -2887,6 +2924,11 @@ func usage() {
       window-tool --app Safari snap 0 center + focus + highlight --color red
       window-tool --app iTerm info 0 + info 1
       window-tool focus id=2457 + highlight + dim id=2789
+
+      A chain stops at the first failure unless --keep-going is given; the exit code
+      is the first failure's. With --json, a chain prints one object:
+      {"results": [{"command", "ok", "data" or "error"}...], "failed_at": N or null}
+      where N is the 1-based number of the first failed command.
 
     Examples:
       window-tool list
@@ -2907,6 +2949,10 @@ var args = Array(CommandLine.arguments.dropFirst())
 if let jsonIdx = args.firstIndex(of: "--json") {
     config.jsonOutput = true
     args.remove(at: jsonIdx)
+}
+if let keepGoingIdx = args.firstIndex(of: "--keep-going") {
+    config.keepGoing = true
+    args.remove(at: keepGoingIdx)
 }
 
 // Parse --app flag
@@ -3183,17 +3229,22 @@ func runCommand(_ args: [String]) throws {
 config.chaining = commandGroups.count > 1
 config.jsonChaining = config.jsonOutput && config.chaining
 
-do {
-    for (index, group) in commandGroups.enumerated() {
-        do {
-            try runCommand(group)
-        } catch {
-            var error = error
-            if case WindowToolError.optionNeedsValue(let option, nil) = error {
-                error = WindowToolError.optionNeedsValue(option, command: group[0])
-            }
-            exitWithError(error, prefix: commandGroups.count > 1 ? "Error in command \(index + 1) (\(group[0]))" : "Error")
+// With --keep-going, a failed command is reported and the chain goes on; the exit code is the first failure's.
+var firstFailureCode: Int32?
+for (index, group) in commandGroups.enumerated() {
+    config.runningCommand = group[0]
+    do {
+        try runCommand(group)
+        recordChainResult()
+    } catch {
+        var error = error
+        if case WindowToolError.optionNeedsValue(let option, nil) = error {
+            error = WindowToolError.optionNeedsValue(option, command: group[0])
         }
+        let prefix = commandGroups.count > 1 ? "Error in command \(index + 1) (\(group[0]))" : "Error"
+        guard config.keepGoing else { exitWithError(error, prefix: prefix) }
+        let code = reportError(error, prefix: prefix).exitCode
+        firstFailureCode = firstFailureCode ?? code
     }
-    flushJSONBuffer()
 }
+flushJSONAndExit(firstFailureCode ?? 0)

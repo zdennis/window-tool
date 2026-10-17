@@ -94,6 +94,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 |--------|-------------|
 | `--app <name-or-id>` | Target application by name or bundle ID; an exact app name (case-insensitive) wins over substring matches |
 | `--json` | Output in JSON format. Status messages (such as `Moved 2 window(s)…`) go to stderr so stdout stays valid JSON |
+| `--keep-going` | In a chain, run the remaining commands after one fails; exit with the first failure's code (see [Command chaining](#command-chaining)) |
 | `--help`, `-h` | Show help; after a command, show that command's help without running it |
 | `--version`, `-v` | Print version and exit |
 
@@ -116,11 +117,28 @@ window-tool --app iTerm info 0 + info 1
 window-tool focus id=2457 + highlight + dim id=2789
 ```
 
-A chain stops at the first failing command and exits with that command's error code. With `--json`, stdout holds one JSON array: the results of the commands that ran before the failure, then the error object (just the error object if the first command fails).
+A chain stops at the first failing command and exits with that command's error code. With `--keep-going`, the remaining commands still run, each failure is reported on stderr, and the exit code is the first failure's.
+
+With `--json`, a chain always prints one object, whatever its length and wherever it failed. `results` has one entry per command that ran, in order: `command`, `ok`, and either `data` (what the command prints on its own with `--json`, or `null` for commands that print nothing) or `error` (the same `{code, message, details}` object a single command prints). `failed_at` is the 1-based number of the first failed command, matching `Error in command N` on stderr, or `null` when every command succeeded. Without `--keep-going`, commands after `failed_at` did not run. A single command keeps its bare shape.
+
+Abbreviated output:
+
+```sh
+$ window-tool --json --app Finder count + info 99 + count
+{
+  "failed_at" : 2,
+  "results" : [
+    { "command" : "count", "data" : { "count" : 4 }, "ok" : true },
+    { "command" : "info", "error" : { "code" : "window_index_out_of_range", ... }, "ok" : false }
+  ]
+}
+```
+
+This replaces the array that chains printed before (one bare result per command, then a bare error object), which changed shape with the chain's length and did not say which command failed.
 
 ### Errors and exit codes
 
-Errors go to stderr as `Error: <message>`. With `--json`, the error is also printed to stdout as an object with a stable `code`, the `message`, and a `details` object holding the values behind the message:
+Errors go to stderr as `Error: <message>`. With `--json`, the error is also printed to stdout (in a chain, as the failed command's `error`; see [Command chaining](#command-chaining)) as an object with a stable `code`, the `message`, and a `details` object holding the values behind the message:
 
 ```sh
 $ window-tool --json --app Finder info 99
