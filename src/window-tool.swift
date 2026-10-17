@@ -21,6 +21,7 @@ struct Config {
     var chainFailedAt: Int?
     var runningCommand: String?
     var commandOutput: [Any] = []
+    var commandWarnings: [String] = []
 }
 
 var config = Config()
@@ -52,6 +53,12 @@ func printJSON(_ value: Any) {
     }
 }
 
+/// Prints a warning to stderr (stdout stays valid JSON); in a `--json` chain it is also added to the command's entry.
+func printWarning(_ message: String) {
+    fputs("Warning: \(message)\n", stderr)
+    config.commandWarnings.append(message)
+}
+
 /// Under `--json` in a chain, closes the running command's entry: `data` is what it printed (null for
 /// nothing, an array when it printed more than once), or `error` is the given error object.
 func recordChainResult(error: [String: Any]? = nil) {
@@ -64,9 +71,11 @@ func recordChainResult(error: [String: Any]? = nil) {
         let output = config.commandOutput
         entry["data"] = output.isEmpty ? NSNull() : output.count == 1 ? output[0] : output
     }
+    if !config.commandWarnings.isEmpty { entry["warnings"] = config.commandWarnings }
     config.chainResults.append(entry)
     config.runningCommand = nil
     config.commandOutput = []
+    config.commandWarnings = []
 }
 
 /// Under `--json` in a chain, prints the `{"results", "failed_at"}` envelope. A command that exits
@@ -588,20 +597,64 @@ func getWindows(appElement: AXUIElement) -> [WindowInfo] {
     return result
 }
 
+/// What the last move/resize asked of one window, kept so `checkRequestedFrames` can compare it with the
+/// frame the window ended up with. Windows with a minimum size, fullscreen windows and windows on other
+/// Spaces can ignore a request without the set call failing.
+struct FrameRequest {
+    let element: AXUIElement
+    var position: CGPoint?
+    var size: CGSize?
+    var failures: [String] = []
+}
+
+var frameRequests: [FrameRequest] = []
+
+func recordFrameRequest(_ window: AXUIElement, position: CGPoint? = nil, size: CGSize? = nil, failure: String? = nil) {
+    var index = frameRequests.firstIndex { CFEqual($0.element, window) }
+    if index == nil {
+        frameRequests.append(FrameRequest(element: window))
+        index = frameRequests.count - 1
+    }
+    frameRequests[index!].position = position ?? frameRequests[index!].position
+    frameRequests[index!].size = size ?? frameRequests[index!].size
+    if let failure { frameRequests[index!].failures.append(failure) }
+}
+
 /// Moves a window to the specified screen coordinates.
 func moveWindow(_ window: AXUIElement, x: CGFloat, y: CGFloat) {
     var point = CGPoint(x: x, y: y)
-    if let value = AXValueCreate(.cgPoint, &point) {
-        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value)
-    }
+    guard let value = AXValueCreate(.cgPoint, &point) else { return }
+    let result = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value)
+    recordFrameRequest(window, position: point, failure: result == .success ? nil : "could not set position (AXError \(result.rawValue))")
 }
 
 /// Resizes a window to the specified width and height.
 func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
     var size = CGSize(width: width, height: height)
-    if let value = AXValueCreate(.cgSize, &size) {
-        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
+    guard let value = AXValueCreate(.cgSize, &size) else { return }
+    let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
+    recordFrameRequest(window, size: size, failure: result == .success ? nil : "could not set size (AXError \(result.rawValue))")
+}
+
+/// Re-reads each window the finished command moved or resized and returns a warning for every set call that
+/// failed or left the frame more than 2 points from the request. Clears the recorded requests.
+func checkRequestedFrames() -> [String] {
+    defer { frameRequests = [] }
+    var warnings: [String] = []
+    for request in frameRequests {
+        var titleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(request.element, kAXTitleAttribute as CFString, &titleRef)
+        let label = (titleRef as? String).map { "'\($0)'" } ?? "window"
+        warnings += request.failures.map { "\(label): \($0)" }
+        guard request.failures.isEmpty, let frame = currentFrame(of: request.element) else { continue }
+        if let p = request.position, abs(frame.origin.x - p.x) > 2 || abs(frame.origin.y - p.y) > 2 {
+            warnings.append("\(label): position requested \(Int(p.x)),\(Int(p.y)) but is \(Int(frame.origin.x)),\(Int(frame.origin.y))")
+        }
+        if let s = request.size, abs(frame.size.width - s.width) > 2 || abs(frame.size.height - s.height) > 2 {
+            warnings.append("\(label): size requested \(Int(s.width))x\(Int(s.height)) but is \(Int(frame.size.width))x\(Int(frame.size.height))")
+        }
     }
+    return warnings
 }
 
 // MARK: - Window Resolution
@@ -2916,6 +2969,13 @@ func usage() {
       1 other failure, 2 usage error, 3 app not found or ambiguous, 4 window not
       found, 5 permission not granted (Accessibility, or Screen Recording for record).
 
+    Warnings:
+      After a move or resize, the window's frame is re-read. If a set call failed or
+      the frame differs from the request by more than 2 points (a minimum size, a
+      fullscreen window), stderr gets "Warning: '<title>': size requested WxH but is WxH" and the exit
+      code stays 0. In a --json chain the entry also has a "warnings" array; a
+      single command prints them on stderr only.
+
     Command chaining:
       Use + to run multiple commands in sequence, sharing --app and --json flags.
       Subsequent commands inherit the window selector from the previous command.
@@ -3235,8 +3295,10 @@ for (index, group) in commandGroups.enumerated() {
     config.runningCommand = group[0]
     do {
         try runCommand(group)
+        checkRequestedFrames().forEach(printWarning)
         recordChainResult()
     } catch {
+        frameRequests = []
         var error = error
         if case WindowToolError.optionNeedsValue(let option, nil) = error {
             error = WindowToolError.optionNeedsValue(option, command: group[0])

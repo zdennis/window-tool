@@ -163,6 +163,8 @@ $ window-tool --json --app Finder info 99
 | 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 
+**Warnings.** After a move or resize, window-tool re-reads the window's frame. When a set call failed, or the frame differs from the request by more than 2 points (a window with a minimum size, a fullscreen window), stderr gets `Warning: '<title>': size requested 400x300 but is 600x400` and the exit code stays 0. In a `--json` chain the command's entry also has a `warnings` array holding those messages; a single command prints them on stderr only.
+
 ## How it works
 
 window-tool uses the macOS Accessibility API (`AXUIElement`) for window operations, which is significantly faster than AppleScript's inter-process communication. Window operations are near-instant.
