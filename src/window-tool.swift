@@ -99,12 +99,13 @@ enum WindowToolError: LocalizedError {
         case .appRequired:
             return "--app is required for this command"
         case .missingWindowSelector:
-            return "Missing window selector. Use an index (0, 1, ...), id=<N>, or title=<pattern>"
+            return "Missing window selector. Use an index (0, 1, ...), id=<N>, or title=<pattern>\nRun 'window-tool help' for usage."
         case .missingArguments(let command):
             let usage = commandSpec(named: command)?.usageLine ?? "window-tool \(command)"
             return "Missing arguments\nUsage: \(usage)\nRun 'window-tool help \(command)' for details."
         case .unknownCommand(let command):
-            return "Unknown command: \(command)"
+            let suggestion = closestCommandName(to: command).map { " Did you mean '\($0)'?" } ?? ""
+            return "Unknown command '\(command)'.\(suggestion) Run 'window-tool help' for the command list."
         case .operationFailed(let message):
             return message
         }
@@ -2698,6 +2699,27 @@ func commandSpec(named name: String) -> CommandSpec? {
     commandSpecs.first { $0.name == name }
 }
 
+func editDistance(_ a: String, _ b: String) -> Int {
+    let a = Array(a), b = Array(b)
+    var previous = Array(0...b.count)
+    for i in a.indices.map({ $0 + 1 }) {
+        var current = [i]
+        for j in b.indices.map({ $0 + 1 }) {
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)))
+        }
+        previous = current
+    }
+    return previous[b.count]
+}
+
+/// The command name closest to `input`, or nil when nothing is within a couple of typos (one for short names, two for longer ones).
+func closestCommandName(to input: String) -> String? {
+    let input = input.lowercased()
+    let ranked = commandSpecs.map { (name: $0.name, distance: editDistance(input, $0.name)) }.min { $0.distance < $1.distance }
+    guard let best = ranked, best.distance <= max(1, min(2, best.name.count / 3)) else { return nil }
+    return best.name
+}
+
 // MARK: - Main
 
 /// Prints the top-level help: every command grouped as in `commandSpecs`, then selectors, options and chaining.
@@ -3029,7 +3051,6 @@ func runCommand(_ args: [String]) throws {
         }
         print(spec.help)
     default:
-        usage()
         throw WindowToolError.unknownCommand(command)
     }
 }
