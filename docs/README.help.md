@@ -13,7 +13,7 @@ window-tool <command> --help
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<command>` | No | Command to describe. Without it, prints every command grouped as Query, Move/size, Layout, Overlays, Capture and Meta, followed by selectors, options and chaining. |
+| `<command>` | No | Command to describe. Without it, prints every command grouped as Query, Elements, Move/size, Layout, Overlays, Capture and Meta, followed by selectors, options and chaining. |
 
 ## Details
 

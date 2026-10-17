@@ -18,7 +18,7 @@ window-tool [--app <name-or-id>] text <window> [--path <path>] [--focused] [--ra
 
 | Option | Description |
 |--------|-------------|
-| `--path <path>` | Read only the element at this path and its descendants. The path is the one `tree` prints, such as `0.2.1`; `""`, the default, is the whole window. |
+| `--path <path>` | Read only the element at this path and its descendants. The path is the one `tree` prints, such as `0.2.1`, and `press --path` takes the same one; `""`, the default, is the whole window. |
 | `--focused` | Print only the value of the element that has keyboard focus. With `--json`, print just that element's object. Fails with exit code 4 (`no_focused_element`) when nothing in the window, or under `--path`, has keyboard focus. |
 | `--raw` | Print line breaks and tabs inside values as they are, so the text reads as it does in the window. Other control characters, such as ESC, stay escaped. |
 | `--max-value N` | Cut values to N characters, 0 for no limit (default: 0). A cut value ends in `…` in text output and has `value_truncated: true` under `--json`. |
@@ -89,6 +89,15 @@ window-tool --json text id=2457 | jq -r '.focused.value // empty'
 window-tool --json tree id=2457 | jq -r '.. | objects | select(.role? == "AXScrollArea") | .path'
 window-tool text id=2457 --path 0.2
 
+# Press Next until the window shows "Done", reading the text after each press; give up after 20 presses
+for i in $(seq 20); do
+  window-tool text id=2457 | grep -qx "Done" && break
+  window-tool press id=2457 --role AXButton --title Next || break
+  sleep 0.5
+done
+
 # Chaining: text inherits the selector from focus
 window-tool --app TextEdit focus 0 + text
 ```
+
+See also [tree](README.tree.md) for paths and [press](README.press.md) to act on an element.

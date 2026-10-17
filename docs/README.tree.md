@@ -43,7 +43,7 @@ The window is the root. Each element has these keys. Apart from `path` and `acti
 
 An element without `children` is a leaf, or was cut off by `--depth`; check `children_omitted` to tell which.
 
-A path is valid only until the window's UI changes: opening a tab or a menu, or a list scrolling, can shift the indexes. Read the tree again before using an old path. `text --path 0.2.1` reads the text at and below one element; the planned `press` command will take a path the same way.
+A path is valid only until the window's UI changes: opening a tab or a menu, or a list scrolling, can shift the indexes. Read the tree again before using an old path. `text --path 0.2.1` reads the text at and below one element; `press --path 0.2.1` presses it.
 
 AppKit custom actions are reported as `Name:<name>\nTarget:<pointer>\nSelector:<selector>`. `--json` keeps the full string, which is the name to use when performing the action; the pointer changes between launches. Text output shows only the name.
 
@@ -74,3 +74,5 @@ window-tool --json tree id=2457 | jq -c '.. | objects | select(.role? == "AXButt
 window-tool --app TextEdit focus 0 + tree --depth 2
 window-tool --json --app TextEdit focus 0 + tree --depth 2 | jq '.results[1].data'
 ```
+
+See also [text](README.text.md) to read the text under a path and [press](README.press.md) to act on an element.

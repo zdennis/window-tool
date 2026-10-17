@@ -23,7 +23,7 @@ Each entry in `commands` has:
 
 | Key | Description |
 |-----|-------------|
-| `name`, `group`, `summary` | Command name, help group (Query, Move/size, Layout, Overlays, Capture, Meta) and one-line summary |
+| `name`, `group`, `summary` | Command name, help group (Query, Elements, Move/size, Layout, Overlays, Capture, Meta) and one-line summary |
 | `synopsis` | Positional arguments as shown in the usage line, such as `<window> [offset] [count] [delay]` |
 | `app` | `required`, `optional` (index and title selectors need `--app`; `id=` finds the app itself) or `none` (the command ignores `--app`) |
 | `mutates` | True when the command moves, resizes, focuses, minimizes or otherwise changes windows (`shake` included). Overlay commands such as `highlight`, `border` and `dim` are `false` because they leave windows unchanged |

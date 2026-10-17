@@ -102,6 +102,14 @@ enum WindowToolError: LocalizedError {
     case noElementAtPath(path: String, parent: String, count: Int, windowID: CGWindowID?)
     /// `text --focused` found no focused element in the window (or under `--path`).
     case noFocusedElement(windowID: CGWindowID?, path: String)
+    /// `press --role`/`--title` matched no element at or below `path`.
+    case noMatchingElement(role: String?, title: String?, path: String, windowID: CGWindowID?)
+    /// `press --role`/`--title` matched more than one element at or below `path`.
+    case ambiguousElement(role: String?, title: String?, path: String, matches: [ElementMatch], windowID: CGWindowID?)
+    /// `press` was pointed at a password field or an element inside one, which it never acts on.
+    case secureElement(path: String, windowID: CGWindowID?)
+    /// The element `press` found does not offer the action; `actions` are the ones it does offer.
+    case actionNotSupported(action: String, path: String, actions: [String], windowID: CGWindowID?)
     /// A window answered the close with a sheet (such as "Do you want to save changes?") instead of closing.
     case unsavedChanges(windows: [(windowID: CGWindowID?, title: String)])
     /// `wait` ran out of time; `what` finishes the sentence "Timed out after Ns waiting for ...".
@@ -159,6 +167,20 @@ enum WindowToolError: LocalizedError {
             let window = windowID.map { "window id=\($0)" } ?? "the window"
             let focus = windowID.map { "'window-tool focus id=\($0)'" } ?? "'window-tool focus'"
             return "No element \(path.isEmpty ? "in \(window)" : "under path \(path) of \(window)") has keyboard focus. Focus belongs to the app, so another of its windows may hold it: click into a field or run \(focus) first."
+        case .noMatchingElement(let role, let title, let path, let windowID):
+            let tree = windowID.map { "'window-tool tree id=\($0)'" } ?? "'window-tool tree'"
+            return "No element \(elementQuery(role: role, title: title)) \(path.isEmpty ? "in the window" : "at or below path \(path)"). Run \(tree) to see roles, titles and paths." + (title == nil ? "" : " Toolbar buttons often have only a description and no title; press those with --path.")
+        case .ambiguousElement(let role, let title, let path, let matches, _):
+            let list = matches.map { "  " + describeElement($0) }.joined(separator: "\n")
+            let missing = [role == nil ? "--role" : nil, title == nil ? "--title" : nil].compactMap { $0 }
+            let hint = missing.isEmpty ? "Narrow the search with --path <subtree>, or press one of the paths above with --path."
+                                       : "Add \(missing.joined(separator: " or ")) to narrow it, or use --path with one of the paths above."
+            return "\(matches.count) elements match \(elementQuery(role: role, title: title)) \(path.isEmpty ? "in the window" : "at or below path \(path)"):\n\(list)\n\(hint)"
+        case .secureElement(let path, _):
+            return "\(path.isEmpty ? "The window" : "Element [\(path)]") is a password field or inside one. press never acts on those, to keep passwords out of scripts' and agents' output and actions."
+        case .actionNotSupported(let action, let path, let actions, _):
+            let offered = actions.isEmpty ? "it offers no actions." : "it offers only \(actions.map(treeDisplayAction).joined(separator: ", ")). Pass one of those with --action."
+            return "\(path.isEmpty ? "The window" : "Element [\(path)]") does not offer \(treeEscape(action)); \(offered)"
         case .unsavedChanges(let windows):
             return "Not closed, the window is asking about unsaved changes: \(windows.map { "'\($0.title)'" }.joined(separator: ", ")). Answer the prompt in the app, then run close again."
         case .timedOut(let what, let seconds):
@@ -216,6 +238,10 @@ enum WindowToolError: LocalizedError {
         case .noPickableWindow: return "no_pickable_window"
         case .noElementAtPath: return "no_element_at_path"
         case .noFocusedElement: return "no_focused_element"
+        case .noMatchingElement: return "no_matching_element"
+        case .ambiguousElement: return "ambiguous_element"
+        case .secureElement: return "secure_element"
+        case .actionNotSupported: return "action_not_supported"
         case .unsavedChanges: return "unsaved_changes"
         case .timedOut: return "timeout"
         case .accessibilityNotEnabled: return "accessibility_not_enabled"
@@ -255,8 +281,15 @@ enum WindowToolError: LocalizedError {
             return ["window_id": Int(windowID)]
         case .noElementAtPath(let path, let parent, let count, let windowID):
             return ["path": path, "parent": parent, "count": count, "window_id": windowID.map { Int($0) } ?? NSNull()]
-        case .noFocusedElement(let windowID, let path):
+        case .noFocusedElement(let windowID, let path), .secureElement(let path, let windowID):
             return ["window_id": windowID.map { Int($0) } ?? NSNull(), "path": path]
+        case .noMatchingElement(let role, let title, let path, let windowID):
+            return elementMatchJSON((path, role, title)).merging(["window_id": windowID.map { Int($0) } ?? NSNull()]) { $1 }
+        case .ambiguousElement(let role, let title, let path, let matches, let windowID):
+            return elementMatchJSON((path, role, title)).merging(["window_id": windowID.map { Int($0) } ?? NSNull(),
+                                                                  "matches": matches.map(elementMatchJSON)]) { $1 }
+        case .actionNotSupported(let action, let path, let actions, let windowID):
+            return ["action": action, "path": path, "actions": actions, "window_id": windowID.map { Int($0) } ?? NSNull()]
         case .invalidValue(let name, let expected, let got):
             return ["name": name, "expected": expected, "got": got]
         case .unknownChoice(let kind, let value, let choices):
@@ -298,7 +331,7 @@ enum WindowToolError: LocalizedError {
         case .appNotFound, .ambiguousApp:
             return 3
         case .windowIndexOutOfRange, .noWindowMatchingTitle, .ambiguousWindowTitle, .noWindowMatchingID, .noWindows, .noPickableWindow,
-             .noElementAtPath, .noFocusedElement:
+             .noElementAtPath, .noFocusedElement, .noMatchingElement, .ambiguousElement:
             return 4
         case .accessibilityNotEnabled, .screenRecordingNotEnabled:
             return 5
@@ -306,7 +339,7 @@ enum WindowToolError: LocalizedError {
             return 6
         case .timedOut:
             return 7
-        case .nothingToUndo, .fileNotFound, .operationFailed:
+        case .nothingToUndo, .fileNotFound, .secureElement, .actionNotSupported, .operationFailed:
             return 1
         }
     }
@@ -2333,10 +2366,9 @@ func treeDisplayString(_ string: String) -> String {
     "\"" + treeEscape(string.count > 80 ? string.prefix(79) + "…" : string) + "\""
 }
 
-/// An action name for `tree` text output. AppKit custom actions are "Name:<name>\nTarget:…\nSelector:…"; only the name is shown.
+/// An action name for `tree` text output: custom actions show only their name.
 func treeDisplayAction(_ action: String) -> String {
-    guard action.hasPrefix("Name:") else { return treeEscape(action) }
-    return treeEscape(String(action.dropFirst(5).prefix { !$0.isNewline }))
+    treeEscape(actionName(action))
 }
 
 /// Prints a `treeNode` and its children as indented lines, two spaces per level, each but the window's starting
@@ -2390,7 +2422,13 @@ func treeCommand(bundleId: String, selector: WindowSelector, depth: Int, maxValu
 // MARK: - Element Paths
 
 // A path addresses one element by its child indexes from the window, as `tree` prints it ("0.2.1"; "" is the window).
-// These helpers are shared by every command that takes a path: `text --path`, and the planned `press`.
+// These helpers are shared by every command that takes a path: `text --path` and `press --path`.
+
+/// An action's name. AppKit custom actions are "Name:<name>\nTarget:…\nSelector:…"; other actions are their own name.
+func actionName(_ action: String) -> String {
+    guard action.hasPrefix("Name:") else { return action }
+    return String(action.dropFirst(5).prefix { !$0.isNewline })
+}
 
 /// Reads an AX attribute that holds an element (a parent, the focused element), or nil.
 func axElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
@@ -2518,6 +2556,87 @@ func textCommand(bundleId: String, selector: WindowSelector, path: String, focus
             print(textLine(text["value"] ?? "", truncated: text["value_truncated"] != nil, raw: raw))
         }
     }
+}
+
+// MARK: - Press Command
+
+/// An element `press` matched or acted on: its `tree` path, role and title.
+typealias ElementMatch = (path: String, role: String?, title: String?)
+
+/// "[0] AXButton title="Save"" for `press` messages, or "the window" and its title for the root.
+func describeElement(_ match: ElementMatch) -> String {
+    (match.path.isEmpty ? "the window" : "[\(match.path)] \(treeEscape(match.role ?? "(no role)"))") +
+        (match.title.map { " title=\(treeDisplayString($0))" } ?? "")
+}
+
+/// An `ElementMatch` as JSON; `role` and `title` are left out when absent.
+func elementMatchJSON(_ match: ElementMatch) -> [String: Any] {
+    var json: [String: Any] = ["path": match.path]
+    json["role"] = match.role
+    json["title"] = match.title
+    return json
+}
+
+/// "with role AXButton and title "Save"" for `press` errors.
+func elementQuery(role: String?, title: String?) -> String {
+    let parts = [role.map { "role \(treeEscape($0))" }, title.map { "title \(treeDisplayString($0))" }].compactMap { $0 }
+    return "with " + parts.joined(separator: " and ")
+}
+
+/// The `treeNode`s at or below `node` whose role is `role` and whose title is `title` (ignoring case), each nil to
+/// match any, in tree order. Secure nodes, and everything inside them, never match.
+func matchingElements(_ node: [String: Any], role: String?, title: String?) -> [ElementMatch] {
+    if node["secure"] as? Bool == true { return [] }
+    let nodeRole = node["role"] as? String, nodeTitle = node["title"] as? String
+    let matches = (role == nil || nodeRole == role) &&
+        (title.map { nodeTitle?.caseInsensitiveCompare($0) == .orderedSame } ?? true)
+    let match: [ElementMatch] = matches ? [(node["path"] as? String ?? "", nodeRole, nodeTitle)] : []
+    return match + (node["children"] as? [[String: Any]] ?? []).flatMap { matchingElements($0, role: role, title: title) }
+}
+
+/// Performs an accessibility action (AXPress by default) on one element of a window: the one at `path`, or with
+/// `role`/`title` the only element at or below `path` that matches. `action` is a raw action string from `tree --json`
+/// or a custom action's name. Never acts on a password field or anything inside one. An app that does not answer in
+/// time (a button that opens a modal dialog, or a hung app) gives a warning and `confirmed: false`, not an error.
+func pressCommand(bundleId: String, selector: WindowSelector, path: String, role: String?, title: String?, action: String) throws {
+    let w = try resolveWindow(bundleId: bundleId, selector: selector)
+    var (element, insideSecure) = try elementAtPath(path, in: w)
+    if insideSecure || isSecureElement(element) { throw WindowToolError.secureElement(path: path, windowID: w.windowID) }
+    var targetPath = path
+    if role != nil || title != nil {
+        let matches = matchingElements(treeNode(element, path: path, depth: maxTreeDepth, maxValue: 1), role: role, title: title)
+        guard let match = matches.first else {
+            throw WindowToolError.noMatchingElement(role: role, title: title, path: path, windowID: w.windowID)
+        }
+        guard matches.count == 1 else {
+            throw WindowToolError.ambiguousElement(role: role, title: title, path: path, matches: matches, windowID: w.windowID)
+        }
+        // The UI can change between the walk and this lookup, so the element found again is checked again.
+        (element, insideSecure) = try elementAtPath(match.path, in: w)
+        if insideSecure || isSecureElement(element) { throw WindowToolError.secureElement(path: match.path, windowID: w.windowID) }
+        targetPath = match.path
+    }
+    let target: ElementMatch = (targetPath, axString(element, kAXRoleAttribute), axString(element, kAXTitleAttribute))
+
+    var actionsRef: CFArray?
+    AXUIElementCopyActionNames(element, &actionsRef)
+    let actions = actionsRef as? [String] ?? []
+    guard let rawAction = actions.first(where: { $0 == action || actionName($0) == action }) else {
+        throw WindowToolError.actionNotSupported(action: action, path: target.path, actions: actions, windowID: w.windowID)
+    }
+    let description = "\(treeEscape(actionName(rawAction))) on \(describeElement(target))"
+    let result = AXUIElementPerformAction(element, rawAction as CFString)
+    switch result {
+    case .success:
+        break
+    case .cannotComplete:
+        commandWarnings.append("the app did not confirm \(description) (AXError \(result.rawValue)); it may have run it (a button that opens a dialog) or the app may be hung, so read the window again to check")
+    default:
+        throw WindowToolError.operationFailed("Could not perform \(description) (AXError \(result.rawValue))")
+    }
+    recordAffectedWindow(w.element)
+    commandResultFields["element"] = elementMatchJSON(target).merging(["action": rawAction, "confirmed": result == .success]) { $1 }
+    printStatus("Performed \(description)")
 }
 
 // MARK: - Wait Command
@@ -3759,6 +3878,7 @@ func countCommand(bundleId: String) throws {
 
 enum CommandGroup: String, CaseIterable {
     case query = "Query"
+    case elements = "Elements"
     case moveSize = "Move/size"
     case layout = "Layout"
     case overlays = "Overlays"
@@ -3890,6 +4010,12 @@ let commandSpecs: [CommandSpec] = [
                         ("--timeout <seconds>", "Give up after this long, greater than 0 (default: 30)")],
                 resolvesOwnApp: true),
 
+    CommandSpec(name: "press", group: .elements, app: .optional, mutates: true, synopsis: "<window>",
+                summary: "Press a button or perform another accessibility action on one element of a window, found by one or more of --path, --role and --title",
+                flags: [("--path <path>", "The element at this path from 'tree', such as 0.2.1; with --role/--title, the subtree to search (default: whole window)"),
+                        ("--role <role>", "Only an element with exactly this role, such as AXButton"),
+                        ("--title <title>", "Only an element with this whole title, ignoring case (unlike title=, not a substring); fails and lists the paths when several match"),
+                        ("--action <action>", "The action to perform, as 'tree' lists it, such as AXShowMenu (default: AXPress)")]),
     CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position> | <window> --rect=<x,y,w,h>",
                 summary: "Snap a window to a screen region",
                 arguments: [("<position>", SnapPosition.allNames)],
@@ -4287,6 +4413,17 @@ func runCommand(_ args: [String]) throws {
         let maxValue = try takeOption("--max-value", from: &rest).map { try parseNonNegativeInt($0, label: "--max-value") } ?? 0
         try textCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector, path: path,
                         focusedOnly: focusedOnly, raw: raw, maxValue: maxValue)
+    case "press":
+        let path = try takeOption("--path", from: &rest)
+        let role = try takeOption("--role", from: &rest)
+        let title = try takeOption("--title", from: &rest)
+        let action = try takeOption("--action", from: &rest) ?? kAXPressAction
+        if action.isEmpty { throw WindowToolError.invalidValue(name: "--action", expected: "an action name from 'tree', such as AXPress", got: action) }
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
+        if path == nil, role == nil, title == nil {
+            throw WindowToolError.optionRequired(option: "--path", command: command, placeholder: "<path>, --role <role> or --title <title>")
+        }
+        try pressCommand(bundleId: config.bundleId, selector: selector, path: path ?? "", role: role, title: title, action: action)
     case "columnize":
         let gap = try takeOption("--gap", from: &rest).map { try parseInt($0, label: "gap") } ?? 10
         try rejectUnknownOptions(rest, command: command)

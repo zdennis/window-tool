@@ -75,6 +75,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `move-to-screen` | [README](docs/README.move-to-screen.md) | Move a window to a different display |
 | `pick` | [README](docs/README.pick.md) | Click a window to print its ID |
 | `preview` | [README](docs/README.preview.md) | Capture a window screenshot as PNG |
+| `press` | [README](docs/README.press.md) | Press a button, or perform another accessibility action, on one element of a window by `--path` or `--role`/`--title`; never on password fields |
 | `quit` | [README](docs/README.quit.md) | Quit an app and wait until it has exited |
 | `record` | [README](docs/README.record.md) | Record video of a window |
 | `resize` | [README](docs/README.resize.md) | Resize a window |
@@ -168,10 +169,10 @@ $ window-tool --json --app Finder info 99
 | Exit code | Meaning | Error codes |
 |-----------|---------|-------------|
 | 0 | Success | |
-| 1 | Other failure | `operation_failed`, `nothing_to_undo`, `file_not_found` |
+| 1 | Other failure | `operation_failed`, `nothing_to_undo`, `file_not_found`, `secure_element`, `action_not_supported` |
 | 2 | Usage error: fix the command line | `unknown_command`, `unknown_option`, `repeated_option`, `unexpected_argument`, `option_needs_value`, `option_takes_no_value`, `option_required`, `missing_arguments`, `missing_window_selector`, `invalid_value`, `unknown_choice`, `app_required`, `screen_index_out_of_range` |
 | 3 | `--app` matched no running app, or more than one | `app_not_found`, `ambiguous_app` |
-| 4 | Window or element not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window`, `no_element_at_path`, `no_focused_element` |
+| 4 | Window or element not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window`, `no_element_at_path`, `no_focused_element`, `no_matching_element`, `ambiguous_element` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 | 6 | `close` was blocked by an unsaved-changes prompt | `unsaved_changes` |
 | 7 | `wait`, or `watch --once` with `--timeout`, timed out | `timeout` |
@@ -180,7 +181,7 @@ New error codes may be added; match on the exit code for the category and on `co
 
 ### Mutating command results
 
-With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `close`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`, `undo`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed or the windows are gone (`close`; `restore` with no minimized windows, `restore-layout` with no matching windows). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`, with `window_id` and `bundle_id` on each window; `watch` and `list` windows carry both too. `restore-layout` also adds `restored` and `total` (saved windows moved, and in the layout); `restore-layout --dry-run` moves nothing and prints `{"plan": [...], "warnings": [...]}` instead.
+With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `close`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`, `undo`, `press`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed or the windows are gone (`close`; `restore` with no minimized windows, `restore-layout` with no matching windows). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`, with `window_id` and `bundle_id` on each window; `watch` and `list` windows carry both too. `restore-layout` also adds `restored` and `total` (saved windows moved, and in the layout); `press` also adds `element`, the element it acted on (`path`, `role`, `title`, `action`, and `confirmed`, false when the app did not answer in time). `restore-layout --dry-run` moves nothing and prints `{"plan": [...], "warnings": [...]}` instead.
 
 After a move or resize, window-tool re-reads the frame. When a set call failed, or the frame differs from the request by more than 2 points (a window with a minimum size, a fullscreen window), stderr gets `Warning: '<title>': size requested 400x300 but is 600x400`, the same message goes in `warnings`, and the exit code stays 0.
 
