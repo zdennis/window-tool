@@ -31,6 +31,7 @@ Filters combine with AND and apply to text and `--json` output alike. An empty r
 | `--screen <screen>` | Windows whose center is on that display. Takes an index from `screens`, or `primary`, `external`, `left`, `right`, `next`, `prev`; the relative names are relative to the display holding the mouse. Windows on no display never match. |
 | `--visible` | Windows that are on screen: not minimized and on the current Space. Windows with no window ID are left out. |
 | `--no-minimized` | Windows that are not minimized (windows on other Spaces stay). |
+| `--all` | Also lists untitled windows that have no window ID (hidden by default). Indexes count them either way. |
 | `--sort <key>` | `app` (default, by app name), `title` (case-insensitive) or `id` (window ID, windows without one last). |
 
 An unknown `--sort` key or `--screen` name exits 2 (`unknown_choice`). A `--screen` index that does not exist, or `external`, `left` or `right` with no such display, exits 2 as well. `--title` is a whole-title glob, unlike the substring match of the `title=` selector, so `--title PR` matches only a window titled exactly `PR`.

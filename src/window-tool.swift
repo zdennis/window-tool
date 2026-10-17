@@ -924,6 +924,7 @@ let screenNames = ["primary", "external", "left", "right", "next", "prev"]
 /// Resolves a screen argument (a display index or one of `screenNames`) to a display index.
 /// `frames` are the displays in global top-left coordinates, indexed as in `screens`; `current` is the display
 /// that `left`, `right`, `next` and `prev` are relative to. `next` and `prev` wrap around in index order.
+/// `primary` is index 0 and `external` index 1: `screens` lists the primary display first.
 func resolveScreenIndex(_ value: String, frames: [CGRect], current: Int) throws -> Int {
     if let index = Int(value) {
         guard frames.indices.contains(index) else {
@@ -3275,7 +3276,7 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Maximize a window to fill its screen"),
     CommandSpec(name: "move-to-screen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <screen>",
                 summary: "Move a window to another display",
-                arguments: [("<screen>", "Display index from 'screens', or primary, external, left, right, next, prev")]),
+                arguments: [("<screen>", "Display index from 'screens', or primary, external, left, right, next, prev (left, right, next and prev count from the window's display)")]),
     CommandSpec(name: "focus", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Bring a window to the front"),
     CommandSpec(name: "minimize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
