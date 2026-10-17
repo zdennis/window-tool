@@ -5,7 +5,7 @@ Centers a window on its current screen, optionally resizing it first.
 ## Usage
 
 ```sh
-window-tool [--app <name-or-id>] center <window> [--size=N or --size=W,H]
+window-tool [--app <name-or-id>] center <window> [--size N | --size W,H]
 ```
 
 ## Arguments
@@ -18,9 +18,11 @@ window-tool [--app <name-or-id>] center <window> [--size=N or --size=W,H]
 
 | Option | Description |
 |--------|-------------|
-| `--size=N` | Resize to NxN pixels before centering |
-| `--size=W,H` | Resize to W x H pixels before centering |
-| `--size=WxH` | Resize to W x H pixels before centering (alternate delimiter) |
+| `--size N` | Resize to NxN pixels before centering |
+| `--size W,H` | Resize to W x H pixels before centering |
+| `--size WxH` | Resize to W x H pixels before centering (alternate delimiter) |
+
+`--size=N` and the other `--flag=value` spellings work too.
 
 ## Details
 
@@ -35,10 +37,10 @@ The command uses the screen that currently contains the window to determine cent
 window-tool --app Safari center 0
 
 # Center and resize to 800x800
-window-tool --app Safari center 0 --size=800
+window-tool --app Safari center 0 --size 800
 
 # Center and resize to 1200x900
-window-tool --app Safari center 0 --size=1200,900
+window-tool --app Safari center 0 --size 1200,900
 window-tool --app Safari center 0 --size=1200x900
 
 # Center by window ID

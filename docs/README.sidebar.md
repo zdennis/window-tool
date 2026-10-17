@@ -5,7 +5,7 @@ Pins a window to an edge of its screen as a sidebar, with optional push/unpush o
 ## Usage
 
 ```sh
-window-tool [--app <name-or-id>] sidebar <window> [--side=left|right|top|bottom] [options]
+window-tool [--app <name-or-id>] sidebar <window> [--side left|right|top|bottom] [options]
 window-tool sidebar --unpush
 ```
 
@@ -19,14 +19,16 @@ window-tool sidebar --unpush
 
 | Option | Description |
 |--------|-------------|
-| `--side=left` | Pin to the left edge (default) |
-| `--side=right` | Pin to the right edge |
-| `--side=top` | Pin to the top edge |
-| `--side=bottom` | Pin to the bottom edge |
+| `--side left` | Pin to the left edge (default) |
+| `--side right` | Pin to the right edge |
+| `--side top` | Pin to the top edge |
+| `--side bottom` | Pin to the bottom edge |
 | `--full-height` | Maximize the window height to fill the visible screen area |
 | `--full-width` | Maximize the window width to fill the visible screen area |
 | `--push` | Push all overlapping windows on the same screen away from the sidebar |
 | `--unpush` | Restore all windows to their pre-push positions and sizes |
+
+`--side=right` and the other `--flag=value` spellings work too.
 
 ## Details
 
@@ -54,7 +56,7 @@ The snapshot covers windows from all applications, not just the `--app` target.
 window-tool --app Notes sidebar 0
 
 # Pin to the right edge
-window-tool --app Notes sidebar 0 --side=right
+window-tool --app Notes sidebar 0 --side right
 
 # Pin to the top edge, full width
 window-tool --app Notes sidebar 0 --side=top --full-width

@@ -142,6 +142,29 @@ func parsePositiveDouble(_ s: String, label: String) throws -> Double {
     return v
 }
 
+/// Removes the first `--name value` or `--name=value` from `args` and returns the value, or nil when absent.
+/// Every command's options go through this so both spellings work everywhere.
+/// In the spaced form the next argument is the value even when it starts with `--`.
+func takeOption(_ name: String, from args: inout [String]) throws -> String? {
+    guard let idx = args.firstIndex(where: { $0 == name || $0.hasPrefix(name + "=") }) else { return nil }
+    if args[idx] != name {
+        return String(args.remove(at: idx).dropFirst(name.count + 1))
+    }
+    guard idx + 1 < args.count else {
+        throw WindowToolError.invalidArgument(value: name, label: "flag (requires a value)")
+    }
+    let value = args[idx + 1]
+    args.removeSubrange(idx...idx + 1)
+    return value
+}
+
+/// Removes a boolean `--name` from `args` and returns whether it was there.
+func takeFlag(_ name: String, from args: inout [String]) -> Bool {
+    guard let idx = args.firstIndex(of: name) else { return false }
+    args.remove(at: idx)
+    return true
+}
+
 // MARK: - Color Parsing
 
 let validColors = ["red", "green", "blue", "yellow", "orange", "purple", "white", "cyan", "magenta", "random"]
@@ -166,64 +189,25 @@ func parseColor(_ name: String) throws -> NSColor {
 }
 
 func parseFlashFlags(_ args: inout [String]) throws -> (color: NSColor, count: Int) {
-    var color = NSColor.green
-    var count = 1
-    if let colorIdx = args.firstIndex(of: "--color") {
-        guard colorIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
-        }
-        color = try parseColor(args[colorIdx + 1])
-        args.removeSubrange(colorIdx...colorIdx + 1)
-    }
-    if let countIdx = args.firstIndex(of: "--count") {
-        guard countIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--count", label: "flag (requires a value)")
-        }
-        count = try parsePositiveInt(args[countIdx + 1], label: "count")
-        args.removeSubrange(countIdx...countIdx + 1)
-    }
+    let color = try takeOption("--color", from: &args).map(parseColor) ?? .green
+    let count = try takeOption("--count", from: &args).map { try parsePositiveInt($0, label: "count") } ?? 1
     return (color, count)
 }
 
-func parseHighlightFlags(_ args: [String]) throws -> (color: NSColor, duration: Double) {
-    var color: NSColor = .red
-    var duration: Double = 3.0
-    if let colorIdx = args.firstIndex(of: "--color") {
-        guard colorIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
-        }
-        color = try parseColor(args[colorIdx + 1])
-    }
-    if let durIdx = args.firstIndex(of: "--duration") {
-        guard durIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
-        }
-        duration = try parseDouble(args[durIdx + 1], label: "duration")
-    }
+func parseHighlightFlags(_ args: inout [String]) throws -> (color: NSColor, duration: Double) {
+    let color = try takeOption("--color", from: &args).map(parseColor) ?? .red
+    let duration = try takeOption("--duration", from: &args).map { try parseDouble($0, label: "duration") } ?? 3.0
     return (color, duration)
 }
 
-func parseBorderFlags(_ args: [String]) throws -> (color: NSColor, width: CGFloat) {
-    var color: NSColor = .blue
-    var width: CGFloat = 3
-    if let colorIdx = args.firstIndex(of: "--color") {
-        guard colorIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
-        }
-        color = try parseColor(args[colorIdx + 1])
-    }
-    if let widthIdx = args.firstIndex(of: "--width") {
-        guard widthIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--width", label: "flag (requires a value)")
-        }
-        width = CGFloat(try parseDouble(args[widthIdx + 1], label: "width"))
-    }
+func parseBorderFlags(_ args: inout [String]) throws -> (color: NSColor, width: CGFloat) {
+    let color = try takeOption("--color", from: &args).map(parseColor) ?? .blue
+    let width = try takeOption("--width", from: &args).map { CGFloat(try parseDouble($0, label: "width")) } ?? 3
     return (color, width)
 }
 
-func parseSizeFlag(_ args: [String]) throws -> (CGFloat, CGFloat)? {
-    guard let sizeArg = args.first(where: { $0.hasPrefix("--size=") }) else { return nil }
-    let value = String(sizeArg.dropFirst(7))
+func parseSizeFlag(_ args: inout [String]) throws -> (CGFloat, CGFloat)? {
+    guard let value = try takeOption("--size", from: &args) else { return nil }
     if let sep = value.firstIndex(of: ",") ?? value.firstIndex(of: "x") {
         let wStr = String(value[value.startIndex..<sep])
         let hStr = String(value[value.index(after: sep)...])
@@ -235,47 +219,18 @@ func parseSizeFlag(_ args: [String]) throws -> (CGFloat, CGFloat)? {
     return (n, n)
 }
 
-func parseSidebarFlags(_ args: [String]) -> (side: String, fullHeight: Bool, fullWidth: Bool, push: Bool) {
-    var side = "left"
-    var fullHeight = false
-    var fullWidth = false
-    var push = false
-    for arg in args {
-        if arg.hasPrefix("--side=") {
-            side = String(arg.dropFirst(7))
-        } else if arg == "--full-height" {
-            fullHeight = true
-        } else if arg == "--full-width" {
-            fullWidth = true
-        } else if arg == "--push" {
-            push = true
-        }
-    }
-    return (side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
+func parseSidebarFlags(_ args: inout [String]) throws -> (side: String, fullHeight: Bool, fullWidth: Bool, push: Bool) {
+    let side = try takeOption("--side", from: &args) ?? "left"
+    let fullHeight = takeFlag("--full-height", from: &args)
+    let fullWidth = takeFlag("--full-width", from: &args)
+    let push = takeFlag("--push", from: &args)
+    return (side, fullHeight, fullWidth, push)
 }
 
 func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, untile: Bool) {
-    var gap = 10
-    var cols: Int? = nil
-    var untile = false
-    if let gapIdx = args.firstIndex(of: "--gap") {
-        guard gapIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--gap", label: "flag (requires a value)")
-        }
-        gap = try parseInt(args[gapIdx + 1], label: "gap")
-        args.removeSubrange(gapIdx...gapIdx + 1)
-    }
-    if let colsIdx = args.firstIndex(of: "--cols") {
-        guard colsIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--cols", label: "flag (requires a value)")
-        }
-        cols = try parsePositiveInt(args[colsIdx + 1], label: "cols")
-        args.removeSubrange(colsIdx...colsIdx + 1)
-    }
-    if let untileIdx = args.firstIndex(of: "--untile") {
-        untile = true
-        args.remove(at: untileIdx)
-    }
+    let gap = try takeOption("--gap", from: &args).map { try parseInt($0, label: "gap") } ?? 10
+    let cols = try takeOption("--cols", from: &args).map { try parsePositiveInt($0, label: "cols") }
+    let untile = takeFlag("--untile", from: &args)
     return (gap, cols, untile)
 }
 
@@ -1087,21 +1042,9 @@ func removePIDFileIfOwned(_ path: String) {
 
 let dimPIDFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-dim.pid")
 
-func parseDimFlags(_ args: [String]) throws -> (opacity: Double, duration: Double) {
-    var opacity: Double = 0.5
-    var duration: Double = 0
-    if let idx = args.firstIndex(of: "--opacity") {
-        guard idx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--opacity", label: "flag (requires a value)")
-        }
-        opacity = try parseDouble(args[idx + 1], label: "opacity")
-    }
-    if let idx = args.firstIndex(of: "--duration") {
-        guard idx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
-        }
-        duration = try parseDouble(args[idx + 1], label: "duration")
-    }
+func parseDimFlags(_ args: inout [String]) throws -> (opacity: Double, duration: Double) {
+    let opacity = try takeOption("--opacity", from: &args).map { try parseDouble($0, label: "opacity") } ?? 0.5
+    let duration = try takeOption("--duration", from: &args).map { try parseDouble($0, label: "duration") } ?? 0
     return (opacity, duration)
 }
 
@@ -1718,12 +1661,8 @@ func captureWindowImage(windowID: CGWindowID) throws -> CGImage {
     return image
 }
 
-func parsePreviewFlags(_ args: [String]) throws -> String? {
-    guard let outIdx = args.firstIndex(of: "--output") else { return nil }
-    guard outIdx + 1 < args.count else {
-        throw WindowToolError.invalidArgument(value: "--output", label: "flag (requires a file path)")
-    }
-    return args[outIdx + 1]
+func parsePreviewFlags(_ args: inout [String]) throws -> String? {
+    try takeOption("--output", from: &args)
 }
 
 func previewCommand(bundleId: String, selector: WindowSelector, outputPath: String?) throws {
@@ -1762,34 +1701,14 @@ func previewCommand(bundleId: String, selector: WindowSelector, outputPath: Stri
 
 // MARK: - Record Command
 
-func parseRecordFlags(_ args: [String]) throws -> (output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) {
-    guard let outIdx = args.firstIndex(of: "--output") else {
+func parseRecordFlags(_ args: inout [String]) throws -> (output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) {
+    guard let output = try takeOption("--output", from: &args) else {
         throw WindowToolError.invalidArgument(value: "--output", label: "flag (required, specify an output file path)")
     }
-    guard outIdx + 1 < args.count else {
-        throw WindowToolError.invalidArgument(value: "--output", label: "flag (requires a file path)")
-    }
-    let output = args[outIdx + 1]
-
-    var fps = 30
-    if let fpsIdx = args.firstIndex(of: "--fps") {
-        guard fpsIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--fps", label: "flag (requires a value)")
-        }
-        fps = try parsePositiveInt(args[fpsIdx + 1], label: "fps")
-    }
-
-    var duration: Double? = nil
-    if let durIdx = args.firstIndex(of: "--duration") {
-        guard durIdx + 1 < args.count else {
-            throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
-        }
-        duration = try parseDouble(args[durIdx + 1], label: "duration")
-    }
-
-    let countdown = !args.contains("--no-countdown")
-    let border = !args.contains("--no-border")
-
+    let fps = try takeOption("--fps", from: &args).map { try parsePositiveInt($0, label: "fps") } ?? 30
+    let duration = try takeOption("--duration", from: &args).map { try parseDouble($0, label: "duration") }
+    let countdown = !takeFlag("--no-countdown", from: &args)
+    let border = !takeFlag("--no-border", from: &args)
     return (output, fps, duration, countdown, border)
 }
 
@@ -2620,8 +2539,8 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Resize a window"),
     CommandSpec(name: "center", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Center a window on its screen",
-                flags: [("--size=N", "Resize to N x N points first"),
-                        ("--size=W,H", "Resize to W x H points first (also --size=WxH)")]),
+                flags: [("--size N", "Resize to N x N points first"),
+                        ("--size W,H", "Resize to W x H points first (also --size WxH)")]),
     CommandSpec(name: "maximize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Maximize a window to fill its screen"),
     CommandSpec(name: "move-to-screen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <screen>",
@@ -2651,7 +2570,7 @@ let commandSpecs: [CommandSpec] = [
                 arguments: [("[offset]", "Pixels between each window (default: 30)")]),
     CommandSpec(name: "sidebar", group: .layout, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Pin a window to an edge of its screen",
-                flags: [("--side=left|right|top|bottom", "Edge to pin to (default: left)"),
+                flags: [("--side left|right|top|bottom", "Edge to pin to (default: left)"),
                         ("--full-height", "Fill the screen height"),
                         ("--full-width", "Fill the screen width"),
                         ("--push", "Push overlapping windows away from the sidebar"),
@@ -2786,6 +2705,7 @@ func usage() {
       --json              Output in JSON format
       --help, -h          Show help; after a command, show that command's help
       --version, -v       Print version and exit
+      Options that take a value accept --flag value or --flag=value.
 
     Output:
       Results go to stdout and errors to stderr. With --json, status messages
@@ -2822,14 +2742,15 @@ if let jsonIdx = args.firstIndex(of: "--json") {
 }
 
 // Parse --app flag
-if let appIdx = args.firstIndex(of: "--app") {
-    guard appIdx + 1 < args.count else {
-        fputs("Error: --app requires an app name or bundle identifier\n", stderr)
-        exit(1)
+do {
+    if let app = try takeOption("--app", from: &args) {
+        guard !app.isEmpty else { throw WindowToolError.appRequired }
+        config.bundleId = app
+        config.appExplicit = true
     }
-    config.bundleId = args[appIdx + 1]
-    config.appExplicit = true
-    args.removeSubrange(appIdx...appIdx+1)
+} catch {
+    fputs("Error: --app requires an app name or bundle identifier\n", stderr)
+    exit(1)
 }
 
 guard !args.isEmpty else {
@@ -2887,14 +2808,7 @@ func runCommand(_ args: [String]) throws {
             throw WindowToolError.missingArguments(command: "columnize")
         }
         var columnArgs = Array(args.dropFirst())
-        var gap = 10
-        if let gapIdx = columnArgs.firstIndex(of: "--gap") {
-            guard gapIdx + 1 < columnArgs.count else {
-                throw WindowToolError.invalidArgument(value: "--gap", label: "flag (requires a value)")
-            }
-            gap = try parseInt(columnArgs[gapIdx + 1], label: "gap")
-            columnArgs.removeSubrange(gapIdx...gapIdx + 1)
-        }
+        let gap = try takeOption("--gap", from: &columnArgs).map { try parseInt($0, label: "gap") } ?? 10
         let selectors = try columnArgs.map { try parseWindowSelector($0) }
         try columnizeCommand(bundleId: config.bundleId, selectors: selectors, gap: gap)
     case "tile":
@@ -2907,8 +2821,8 @@ func runCommand(_ args: [String]) throws {
             try tileCommand(bundleId: config.bundleId, selectors: selectors, gap: tileFlags.gap, colsOverride: tileFlags.cols)
         }
     case "center":
-        let (selector, rest) = try resolveSelectorWithFlags(args)
-        let size = try parseSizeFlag(rest)
+        var (selector, rest) = try resolveSelectorWithFlags(args)
+        let size = try parseSizeFlag(&rest)
         try centerCommand(bundleId: config.bundleId, selector: selector, size: size)
     case "count":
         try countCommand(bundleId: config.bundleId)
@@ -2947,8 +2861,8 @@ func runCommand(_ args: [String]) throws {
         if args.contains("--unpush") {
             try sidebarUnpushCommand()
         } else {
-            let (selector, rest) = try resolveSelectorWithFlags(args)
-            let (side, fullHeight, fullWidth, push) = parseSidebarFlags(rest)
+            var (selector, rest) = try resolveSelectorWithFlags(args)
+            let (side, fullHeight, fullWidth, push) = try parseSidebarFlags(&rest)
             try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
         }
     case "move-to-screen":
@@ -2996,32 +2910,20 @@ func runCommand(_ args: [String]) throws {
         let flags = try parseFlashFlags(&rest)
         try flashCommand(bundleId: config.bundleId, selector: selector, color: flags.color, count: flags.count)
     case "highlight":
-        let (selector, rest) = try resolveSelectorWithFlags(args)
-        let hlFlags = try parseHighlightFlags(rest)
+        var (selector, rest) = try resolveSelectorWithFlags(args)
+        let hlFlags = try parseHighlightFlags(&rest)
         try highlightCommand(bundleId: config.bundleId, selector: selector, color: hlFlags.color, duration: hlFlags.duration)
     case "pick":
         pickCommand()
     case "identify":
-        var identifyDuration = 3.0
-        var identifyColor: NSColor = .magenta
-        let identifyArgs = Array(args.dropFirst())
-        if let durIdx = identifyArgs.firstIndex(of: "--duration") {
-            guard durIdx + 1 < identifyArgs.count else {
-                throw WindowToolError.invalidArgument(value: "--duration", label: "flag (requires a value)")
-            }
-            identifyDuration = try parseDouble(identifyArgs[durIdx + 1], label: "duration")
-        }
-        if let colorIdx = identifyArgs.firstIndex(of: "--color") {
-            guard colorIdx + 1 < identifyArgs.count else {
-                throw WindowToolError.invalidArgument(value: "--color", label: "flag (requires a value)")
-            }
-            identifyColor = try parseColor(identifyArgs[colorIdx + 1])
-        }
+        var identifyArgs = Array(args.dropFirst())
+        let identifyDuration = try takeOption("--duration", from: &identifyArgs).map { try parseDouble($0, label: "duration") } ?? 3.0
+        let identifyColor = try takeOption("--color", from: &identifyArgs).map(parseColor) ?? .magenta
         let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
         try identifyCommand(bundleId: resolvedBundleId, duration: identifyDuration, color: identifyColor)
     case "border":
-        let (selector, rest) = try resolveSelectorWithFlags(args)
-        let borderFlags = try parseBorderFlags(rest)
+        var (selector, rest) = try resolveSelectorWithFlags(args)
+        let borderFlags = try parseBorderFlags(&rest)
         try borderCommand(bundleId: config.bundleId, selector: selector, color: borderFlags.color, width: borderFlags.width)
     case "unborder":
         if args.count >= 2 || (config.chaining && config.lastSelector != nil) {
@@ -3033,18 +2935,18 @@ func runCommand(_ args: [String]) throws {
     case "unborder-all":
         unborderAllCommand()
     case "dim":
-        let (selector, rest) = try resolveSelectorWithFlags(args)
-        let dimFlags = try parseDimFlags(rest)
+        var (selector, rest) = try resolveSelectorWithFlags(args)
+        let dimFlags = try parseDimFlags(&rest)
         try dimCommand(bundleId: config.bundleId, selector: selector, opacity: dimFlags.opacity, duration: dimFlags.duration)
     case "undim":
         try undimCommand()
     case "preview":
-        let (previewSelector, previewRest) = try resolveSelectorWithFlags(args)
-        let outputPath = try parsePreviewFlags(previewRest)
+        var (previewSelector, previewRest) = try resolveSelectorWithFlags(args)
+        let outputPath = try parsePreviewFlags(&previewRest)
         try previewCommand(bundleId: config.bundleId, selector: previewSelector, outputPath: outputPath)
     case "record":
-        let (recordSelector, recordRest) = try resolveSelectorWithFlags(args)
-        let recordFlags = try parseRecordFlags(recordRest)
+        var (recordSelector, recordRest) = try resolveSelectorWithFlags(args)
+        let recordFlags = try parseRecordFlags(&recordRest)
         try recordCommand(bundleId: config.bundleId, selector: recordSelector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
     case "screens":
         screensCommand()
