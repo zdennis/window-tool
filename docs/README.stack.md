@@ -12,7 +12,7 @@ window-tool --app <name-or-id> stack [<window>...] [--offset N]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>...` | No | Window selectors to cascade: index, `id=<N>`, or `title=<pattern>`. If omitted, cascades all windows for the app |
+| `<window>...` | No | Window selectors to cascade: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). If omitted, cascades all windows for the app |
 
 ## Options
 

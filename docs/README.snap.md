@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] snap <window> <position>
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>`. Optional when chaining with `+` -- inherits the selector from the previous command; in a chain, a lone position is read as `<position>`. |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). Optional when chaining with `+` -- inherits the selector from the previous command; in a chain, a lone position is read as `<position>`. |
 | `<position>` | Yes | Snap position (see below) |
 
 ## Details

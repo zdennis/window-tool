@@ -16,7 +16,7 @@ window-tool [--app <name-or-id>] maximize <window>
 
 ## Details
 
-Moves and resizes the window to fill the visible screen area (excluding menu bar and dock) on whichever screen the window currently occupies. When using `title=<pattern>`, operates on all matching windows.
+Moves and resizes the window to fill the visible screen area (excluding menu bar and dock) on whichever screen the window currently occupies. When using `title=<pattern>`, operates on all matching windows (case-insensitive substring match).
 
 This is not macOS fullscreen mode -- see `fullscreen` for that.
 

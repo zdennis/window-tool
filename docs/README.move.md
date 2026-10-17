@@ -20,7 +20,7 @@ window-tool [--app <name-or-id>] move <window> <x> <y> [<width> <height>]
 
 ## Details
 
-If width and height are omitted, only the position changes. If provided, the window is both moved and resized. When using `title=<pattern>`, operates on all matching windows.
+If width and height are omitted, only the position changes. If provided, the window is both moved and resized. When using `title=<pattern>`, operates on all matching windows (case-insensitive substring match).
 
 With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
 

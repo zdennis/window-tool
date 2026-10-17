@@ -44,6 +44,8 @@ Use `--app` to target a specific application by name or bundle ID. `--app` is re
 
 Window indexes change as windows open, close or minimize, so prefer `id=` in scripts (find IDs with `list`, `identify` or `pick`) and use `title=` or an index for interactive use.
 
+`title=<pattern>` is a case-insensitive substring match. `move`, `resize` and `maximize` act on every matching window. Every other command needs one window: when several match it fails with exit code 4 and lists the candidates (`ambiguous_window_title`, with `details.matches` under `--json`). Pass `--first` to use the first match, or select by `id=` or index.
+
 ### Commands
 
 | Command | Docs | Description |
@@ -95,6 +97,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `--app <name-or-id>` | Target application by name or bundle ID; an exact app name (case-insensitive) wins over substring matches |
 | `--json` | Output in JSON format. Commands that change windows print the changed windows instead of status messages such as `Moved 2 window(s)…` (see [Mutating command results](#mutating-command-results)) |
 | `--keep-going` | In a chain, run the remaining commands after one fails; exit with the first failure's code (see [Command chaining](#command-chaining)) |
+| `--first` | With `title=`, use the first match when several windows match instead of failing; `move`, `resize` and `maximize` ignore it |
 | `--help`, `-h` | Show help; after a command, show that command's help without running it |
 | `--version`, `-v` | Print version and exit |
 
@@ -160,7 +163,7 @@ $ window-tool --json --app Finder info 99
 | 1 | Other failure | `operation_failed`, `nothing_to_undo`, `file_not_found` |
 | 2 | Usage error: fix the command line | `unknown_command`, `unknown_option`, `repeated_option`, `unexpected_argument`, `option_needs_value`, `option_takes_no_value`, `option_required`, `missing_arguments`, `missing_window_selector`, `invalid_value`, `unknown_choice`, `app_required`, `screen_index_out_of_range` |
 | 3 | `--app` matched no running app, or more than one | `app_not_found`, `ambiguous_app` |
-| 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
+| 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 
 ### Mutating command results

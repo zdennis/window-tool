@@ -12,6 +12,7 @@ struct Config {
     var appExplicit: Bool = false
     var jsonOutput: Bool = false
     var keepGoing: Bool = false
+    var firstMatch: Bool = false
     var jsonChaining: Bool = false
     var chaining: Bool = false
     var lastSelector: WindowSelector?
@@ -88,6 +89,7 @@ enum WindowToolError: LocalizedError {
     case ambiguousApp(query: String, matches: [(name: String, bundleId: String)])
     case windowIndexOutOfRange(index: Int, count: Int)
     case noWindowMatchingTitle(String)
+    case ambiguousWindowTitle(pattern: String, matches: [(index: Int, windowID: CGWindowID?, title: String)])
     case noWindowMatchingID(CGWindowID)
     case screenIndexOutOfRange(index: Int, count: Int)
     case noWindows
@@ -123,6 +125,9 @@ enum WindowToolError: LocalizedError {
             return "Window index \(index) out of range\(count == 0 ? " (no windows)" : " (0..\(count - 1))")"
         case .noWindowMatchingTitle(let pattern):
             return "No window found matching '\(pattern)'"
+        case .ambiguousWindowTitle(let pattern, let matches):
+            let list = matches.map { "  \($0.windowID.map { "id=\($0)" } ?? "no id")  [\($0.index)]  \($0.title)" }.joined(separator: "\n")
+            return "\(matches.count) windows match title '\(pattern)':\n\(list)\nUse id=<N> or an index, or pass --first to use the first match."
         case .noWindowMatchingID(let windowID):
             return "No window found with ID \(windowID)"
         case .screenIndexOutOfRange(let index, let count):
@@ -177,6 +182,7 @@ enum WindowToolError: LocalizedError {
         case .ambiguousApp: return "ambiguous_app"
         case .windowIndexOutOfRange: return "window_index_out_of_range"
         case .noWindowMatchingTitle: return "no_window_matching_title"
+        case .ambiguousWindowTitle: return "ambiguous_window_title"
         case .noWindowMatchingID: return "no_window_matching_id"
         case .screenIndexOutOfRange: return "screen_index_out_of_range"
         case .noWindows: return "no_windows"
@@ -212,6 +218,8 @@ enum WindowToolError: LocalizedError {
             return ["index": index, "count": count]
         case .noWindowMatchingTitle(let pattern):
             return ["title": pattern]
+        case .ambiguousWindowTitle(let pattern, let matches):
+            return ["title": pattern, "matches": matches.map { ["index": $0.index, "window_id": $0.windowID.map { Int($0) } ?? NSNull(), "title": $0.title] as [String: Any] }]
         case .noWindowMatchingID(let windowID):
             return ["window_id": Int(windowID)]
         case .invalidValue(let name, let expected, let got):
@@ -246,7 +254,7 @@ enum WindowToolError: LocalizedError {
             return 2
         case .appNotFound, .ambiguousApp:
             return 3
-        case .windowIndexOutOfRange, .noWindowMatchingTitle, .noWindowMatchingID, .noWindows, .noPickableWindow:
+        case .windowIndexOutOfRange, .noWindowMatchingTitle, .ambiguousWindowTitle, .noWindowMatchingID, .noWindows, .noPickableWindow:
             return 4
         case .accessibilityNotEnabled, .screenRecordingNotEnabled:
             return 5
@@ -744,6 +752,11 @@ func resolveWindow(bundleId: String, selector: WindowSelector) throws -> WindowI
     return window
 }
 
+/// `title=` matches a case-insensitive substring of the window title.
+private func titleMatches(_ window: WindowInfo, _ pattern: String) -> Bool {
+    window.title.range(of: pattern, options: .caseInsensitive) != nil
+}
+
 private func lookUpWindow(bundleId: String, selector: WindowSelector) throws -> WindowInfo {
     // For byWindowID with no --app, go straight to cross-app lookup
     if case .byWindowID(let windowID) = selector, bundleId.isEmpty {
@@ -762,8 +775,12 @@ private func lookUpWindow(bundleId: String, selector: WindowSelector) throws -> 
         }
         return windows[index]
     case .byTitle(let pattern):
-        guard let window = windows.first(where: { $0.title.contains(pattern) }) else {
+        let matching = windows.filter { titleMatches($0, pattern) }
+        guard let window = matching.first else {
             throw WindowToolError.noWindowMatchingTitle(pattern)
+        }
+        if matching.count > 1 && !config.firstMatch {
+            throw WindowToolError.ambiguousWindowTitle(pattern: pattern, matches: matching.map { ($0.id, $0.windowID, $0.title) })
         }
         return window
     case .byWindowID(let windowID):
@@ -839,7 +856,7 @@ func resolveAllWindows(bundleId: String, selector: WindowSelector) throws -> [Wi
         }
         return [windows[index]]
     case .byTitle(let pattern):
-        let matching = windows.filter { $0.title.contains(pattern) }
+        let matching = windows.filter { titleMatches($0, pattern) }
         guard !matching.isEmpty else {
             throw WindowToolError.noWindowMatchingTitle(pattern)
         }
@@ -2790,6 +2807,9 @@ struct CommandSpec {
             if app == .optional {
                 lines.append("Index and title= selectors need --app; id= finds the window's app itself.")
             }
+            let actsOnAll = ["move", "resize", "maximize"].contains(name)
+            lines.append(actsOnAll ? "title= is a case-insensitive substring and acts on every matching window."
+                                   : "title= is a case-insensitive substring; when several windows match it fails and lists them, unless --first is given.")
         }
         lines += ["", "Run 'window-tool help' for global options, chaining and all commands."]
         return lines.joined(separator: "\n")
@@ -2978,7 +2998,7 @@ func usage() {
     }
     let width = entries.map(\.name.count).max() ?? 0
     var lines = [
-        "Usage: window-tool [--app <name-or-id>] [--json] [--keep-going] <command> [args...]",
+        "Usage: window-tool [--app <name-or-id>] [--json] [--keep-going] [--first] <command> [args...]",
         "       window-tool help <command>        Show one command's arguments and options",
     ]
     for group in CommandGroup.allCases {
@@ -2991,7 +3011,9 @@ func usage() {
       <window> can be:
         0, 1, 2...          Index from 'list' output (needs --app)
         id=<window_id>      CGWindowID (e.g., id=1341); finds the window's app itself
-        title=<pattern>     Substring match on window title (needs --app)
+        title=<pattern>     Case-insensitive substring of the window title (needs --app)
+      move, resize and maximize act on every title match. Other commands fail when several
+      windows match and list them; pass --first to use the first match instead.
       Use 'list' to see available indices and window IDs. Prefer id= in scripts.
 
     Snap positions:
@@ -3004,6 +3026,7 @@ func usage() {
       --app <name-or-id>  Target application by name or bundle ID
       --json              Output in JSON format
       --keep-going        In a chain, run the remaining commands after one fails
+      --first             With title=, use the first match when several windows match (move, resize and maximize ignore it)
       --help, -h          Show help; after a command, show that command's help
       --version, -v       Print version and exit
       Options that take a value accept --flag value or --flag=value.
@@ -3059,6 +3082,10 @@ var args = Array(CommandLine.arguments.dropFirst())
 if let jsonIdx = args.firstIndex(of: "--json") {
     config.jsonOutput = true
     args.remove(at: jsonIdx)
+}
+if let firstIdx = args.firstIndex(of: "--first") {
+    config.firstMatch = true
+    args.remove(at: firstIdx)
 }
 if let keepGoingIdx = args.firstIndex(of: "--keep-going") {
     config.keepGoing = true
