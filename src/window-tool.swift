@@ -1439,7 +1439,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
 
     if push {
         // The sidebar's final rectangle
-        let sidebarRect = CGRect(x: sidebarX, y: bounds.y, width: w, height: h)
+        let sidebarRect = CGRect(x: sidebarX, y: sidebarY, width: w, height: h)
         let sidebarWindowID = window.windowID
 
         var snapshots: [SidebarWindowSnapshot] = []
