@@ -74,7 +74,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `preview` | [README](docs/README.preview.md) | Capture a window screenshot as PNG |
 | `record` | [README](docs/README.record.md) | Record video of a window |
 | `resize` | [README](docs/README.resize.md) | Resize a window |
-| `restore` | [README](docs/README.restore.md) | Restore all minimized windows |
+| `restore` | [README](docs/README.restore.md) | Restore minimized windows, or one window |
 | `restore-layout` | [README](docs/README.restore-layout.md) | Restore window layout from a JSON file |
 | `save-layout` | [README](docs/README.save-layout.md) | Save window layout to a JSON file |
 | `screens` | [README](docs/README.screens.md) | List all displays with bounds and scale in window coordinates |

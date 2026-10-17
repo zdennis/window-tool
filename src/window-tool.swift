@@ -1867,12 +1867,18 @@ func minimizeCommand(bundleId: String, selector: WindowSelector) throws {
     recordAffectedWindow(window.element)
 }
 
-/// Restores (unminimizes) all minimized windows for the given application.
-func restoreCommand(bundleId: String) throws {
-    let app = try requireApp(bundleId)
-    var windowsRef: CFTypeRef?
-    AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
-    guard let windows = windowsRef as? [AXUIElement] else { return }
+/// Restores (unminimizes) the selected window, or every minimized window of the application when no selector is given.
+func restoreCommand(bundleId: String, selector: WindowSelector?) throws {
+    let windows: [AXUIElement]
+    if let selector {
+        windows = [try resolveWindow(bundleId: bundleId, selector: selector).element]
+    } else {
+        let app = try requireApp(bundleId)
+        var windowsRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
+        guard let all = windowsRef as? [AXUIElement] else { return }
+        windows = all
+    }
     var restored = 0
     for window in windows {
         var minimizedRef: CFTypeRef?
@@ -2869,8 +2875,8 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Bring a window to the front"),
     CommandSpec(name: "minimize", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Minimize a window"),
-    CommandSpec(name: "restore", group: .moveSize, app: .required, mutates: true,
-                summary: "Restore all minimized windows for --app"),
+    CommandSpec(name: "restore", group: .moveSize, app: .optional, mutates: true, synopsis: "[<window>]",
+                summary: "Restore minimized windows: all for --app, or just <window>"),
     CommandSpec(name: "fullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
                 summary: "Enter macOS fullscreen"),
     CommandSpec(name: "unfullscreen", group: .moveSize, app: .optional, mutates: true, synopsis: "<window>",
@@ -3240,8 +3246,8 @@ func runCommand(_ args: [String]) throws {
     case "minimize":
         try minimizeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "restore":
-        try checkArgs(rest, command: command)
-        try restoreCommand(bundleId: config.bundleId)
+        let selector = rest.isEmpty ? nil : try resolveSelectorAndArgs(rest, command: command).selector
+        try restoreCommand(bundleId: config.bundleId, selector: selector)
     case "save-layout":
         guard let filePath = try checkArgs(rest, command: command, max: 1).first else {
             throw WindowToolError.missingArguments(command: "save-layout")
