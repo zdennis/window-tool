@@ -968,6 +968,7 @@ func screensCommand() {
 }
 
 /// A window in the `info` JSON schema; mutating commands report the windows they changed in it too.
+/// `list --fields` accepts these keys (see `listFieldNames`); add new keys there too.
 func windowInfoJSON(_ w: WindowInfo, bundleId: String? = nil) -> [String: Any] {
     var dict: [String: Any] = [
         "title": w.title,
@@ -1094,13 +1095,19 @@ func checkAccessibility() throws {
 
 // MARK: - Commands
 
+/// Keys `list --fields` accepts: the `list --json` schema.
+let listFieldNames = ["app", "bundle_id", "index", "parent_index", "window_id", "title", "x", "y", "width", "height",
+                      "minimized", "fullscreen", "focused", "main", "modal", "role", "subrole", "document",
+                      "pid", "screen", "on_screen", "layer"]
+
 /// Lists windows. When bundleId is provided, lists windows for that app only.
 /// When nil, lists all windows across all running apps, sorted by app name.
 /// The filters narrow that list: `titleGlob` (whole title, case-insensitive), `screen` (a `screens` index or name,
 /// matched on the display holding the window's center), `visibleOnly` (on the current Space and not minimized) and
 /// `excludeMinimized`. `sort` is `app` (the default), `title` or `id`.
+/// `idsOnly` prints just the window IDs; `fields` (keys of the JSON schema, see `listFieldNames`) limits the output to those keys.
 func listCommand(bundleId: String?, titleGlob: String? = nil, screen: String? = nil, visibleOnly: Bool = false,
-                 excludeMinimized: Bool = false, sort: String = "app") throws {
+                 excludeMinimized: Bool = false, sort: String = "app", idsOnly: Bool = false, fields: [String]? = nil) throws {
     struct WindowEntry {
         let app: String
         let bundleId: String
@@ -1174,7 +1181,11 @@ func listCommand(bundleId: String?, titleGlob: String? = nil, screen: String? = 
     default: break
     }
 
-    if config.jsonOutput {
+    if idsOnly {
+        let ids = entries.compactMap { $0.window.windowID.map { Int($0) } }
+        if config.jsonOutput { printJSON(ids) } else { ids.forEach { print($0) } }
+    } else if config.jsonOutput || fields != nil {
+        // `--fields` without --json also builds the JSON dicts, then prints the chosen keys as columns.
         let items = entries.map { e -> [String: Any] in
             let w = e.window
             var dict = windowInfoJSON(w, bundleId: e.bundleId)
@@ -1185,9 +1196,17 @@ func listCommand(bundleId: String?, titleGlob: String? = nil, screen: String? = 
                 dict["on_screen"] = cg[kCGWindowIsOnscreen] as? Bool ?? false
                 if let layer = cg[kCGWindowLayer] as? Int { dict["layer"] = layer }
             }
+            if let fields = fields { dict = dict.filter { fields.contains($0.key) } }
             return dict
         }
-        printJSON(items)
+        if config.jsonOutput {
+            printJSON(items)
+        } else if let fields = fields {
+            print(fields.joined(separator: "\t"))
+            for item in items {
+                print(fields.map { item[$0].map { "\($0)" } ?? "" }.joined(separator: "\t"))
+            }
+        }
     } else {
         print("APP\tBUNDLE ID\tINDEX\tWID\tPOSITION\tSIZE\tTITLE")
         for e in entries {
@@ -2935,7 +2954,9 @@ let commandSpecs: [CommandSpec] = [
                         ("--screen <screen>", "Only windows on a display: an index from 'screens', or primary, external, left, right, next, prev (relative to the mouse's display)"),
                         ("--visible", "Only windows that are on screen (not minimized, on the current Space)"),
                         ("--no-minimized", "Leave out minimized windows"),
-                        ("--sort <key>", "Order by app (default), title or id")],
+                        ("--sort <key>", "Order by app (default), title or id"),
+                        ("--ids", "Print only window IDs, one per line (--json: an array of numbers)"),
+                        ("--fields <a,b,c>", "Print only these fields (the --json keys, 'id' for window_id): tab-separated with a header, or --json objects")],
                 resolvesOwnApp: true),
     CommandSpec(name: "info", group: .query, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Show detailed info for a window"),
@@ -3298,10 +3319,22 @@ func runCommand(_ args: [String]) throws {
         guard ["app", "title", "id"].contains(sort) else {
             throw WindowToolError.unknownChoice(kind: "sort key", value: sort, choices: ["app", "title", "id"])
         }
+        let idsOnly = takeFlag("--ids", from: &rest)
+        let fieldsArg = try takeOption("--fields", from: &rest)
+        var fields: [String]?
+        if let arg = fieldsArg {
+            if idsOnly {
+                throw WindowToolError.invalidValue(name: "--fields", expected: "left out when --ids is given (--ids prints only window IDs)", got: arg)
+            }
+            fields = arg.split(separator: ",", omittingEmptySubsequences: false).map { $0 == "id" ? "window_id" : String($0) }
+            if let bad = fields?.first(where: { !listFieldNames.contains($0) }) {
+                throw WindowToolError.unknownChoice(kind: "field", value: bad, choices: listFieldNames)
+            }
+        }
         try checkArgs(rest, command: command)
         let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
         try listCommand(bundleId: resolvedBundleId, titleGlob: titleGlob, screen: screen, visibleOnly: visibleOnly,
-                        excludeMinimized: excludeMinimized, sort: sort)
+                        excludeMinimized: excludeMinimized, sort: sort, idsOnly: idsOnly, fields: fields)
     case "info":
         try infoCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "columnize":

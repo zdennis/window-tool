@@ -8,6 +8,8 @@ List windows with their app, index, position, size, and title.
 window-tool list
 window-tool --app <name-or-id> list
 window-tool list [--title <glob>] [--screen <screen>] [--visible] [--no-minimized] [--sort app|title|id]
+window-tool list --ids
+window-tool list --fields <a,b,c>
 ```
 
 ## Details
@@ -30,6 +32,15 @@ Filters combine with AND and apply to text and `--json` output alike. An empty r
 
 An unknown `--sort` key or `--screen` name exits 2 (`unknown_choice`). A `--screen` index that does not exist, or `external`, `left` or `right` with no such display, exits 2 as well. `--title` is a whole-title glob, unlike the substring match of the `title=` selector, so `--title PR` matches only a window titled exactly `PR`.
 
+## Output shaping
+
+| Option | Prints |
+|---|---|
+| `--ids` | Only window IDs, one per line, after filters and sorting. Windows with no window ID are skipped. With `--json`, an array of numbers. |
+| `--fields <a,b,c>` | Only those fields. Text: a tab-separated header row of the field names, then one row per window (a field a window lacks is empty). With `--json`, objects holding only those keys. |
+
+`--fields` takes the `--json` keys: app, bundle_id, index, parent_index, window_id, title, x, y, width, height, minimized, fullscreen, focused, main, modal, role, subrole, document, pid, screen, on_screen, layer. `id` is accepted for `window_id`; the header and the JSON key still read `window_id`. A field a window lacks is an empty cell in text and a missing key in `--json`. Text rows are not escaped, so a title containing a tab or newline breaks the columns; use `--json` for such windows. An unknown field exits 2 (`unknown_choice`); combining `--ids` with `--fields` exits 2 (`invalid_value`).
+
 ## Examples
 
 ```sh
@@ -42,5 +53,8 @@ window-tool --app iTerm list
 window-tool --json list
 window-tool list --title='*PR*' --screen=1 --visible --no-minimized --sort=title
 window-tool --app Safari --json list --no-minimized --sort=id
+window-tool list --visible --ids | xargs -n1 echo
+window-tool list --title='*PR*' --fields=id,app,title
+window-tool --json list --fields=window_id,minimized
 window-tool --json list | jq '.[] | select(.minimized | not) | .window_id'
 ```
