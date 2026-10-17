@@ -34,13 +34,15 @@ If `/usr/local/bin` does not exist (common on Apple Silicon), use `ln -s "$PWD/b
 ## Usage
 
 ```
-window-tool [--app <name-or-id>] <command> [args...]
+window-tool [--app <name-or-id>] [--exact] <command> [args...]
 window-tool help [<command>]
 ```
 
 Run `window-tool help` for every command grouped by purpose, and `window-tool help <command>` or `window-tool <command> --help` for one command's arguments and options. `window-tool --json commands` prints the same table as JSON.
 
 Use `--app` to target a specific application by name or bundle ID. `--app` is required whenever you select a window by index or `title=`; there is no frontmost-app default. With `id=<N>` selectors, `--app` is optional because the owning app is detected automatically.
+
+An exact bundle ID or a whole app name (ignoring case) wins; otherwise `--app` matches a substring of a running app's name or bundle ID, and fails with `ambiguous_app` when several match. A substring that matches one app today can become ambiguous when another app launches, so scripts should pass a bundle ID (which never needs `--exact`) or add `--exact`, which accepts only a whole name or bundle ID (ignoring case) and never matches substrings. Under `--exact`, a miss is `app_not_found` with `details.exact: true` (the miss came from `--exact` matching) and `details.candidates`, the apps a substring match would have found.
 
 Window indexes change as windows open, close or minimize, so prefer `id=` in scripts (find IDs with `list`, `identify` or `pick`) and use `title=` or an index for interactive use.
 
@@ -103,7 +105,8 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 
 | Option | Description |
 |--------|-------------|
-| `--app <name-or-id>` | Target application by name or bundle ID; an exact app name (case-insensitive) wins over substring matches |
+| `--app <name-or-id>` | Target application by name or bundle ID; an exact app name (case-insensitive) wins over substring matches. In a chain, each command can name its own (see [Command chaining](#command-chaining)) |
+| `--exact` | Match `--app` only as a whole app name or bundle ID, ignoring case, never as a substring; applies to every `--app` in a chain |
 | `--json` | Output in JSON format. Commands that change windows print the changed windows instead of status messages such as `Moved 2 window(s)…` (see [Mutating command results](#mutating-command-results)) |
 | `--keep-going` | In a chain, run the remaining commands after one fails; exit with the first failure's code (see [Command chaining](#command-chaining)) |
 | `--first` | With `title=`, use the first match when several windows match instead of failing; `move`, `resize` and `maximize` ignore it |
@@ -116,7 +119,7 @@ A command's options can come before or after its arguments. An option the comman
 
 ### Command chaining
 
-Use `+` to run multiple commands in sequence, sharing `--app` and `--json` flags. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once. Once a command resolves a window, later commands in the chain target it by window ID, so they keep hitting the same window even after `focus` reorders the window list. In a chain, `move`, `resize`, `snap`, `move-to-screen` and `shake` read bare numbers that fit their own arguments as arguments, not as a window index (`+ shake 20`, `+ move 100 200 800 600`); use `id=` or `title=` to name a different window:
+Use `+` to run multiple commands in sequence, sharing `--json`, `--first` and `--exact`. Subsequent commands inherit the window selector from the previous command when one is not provided, so you only need to specify the target window once. Once a command resolves a window, later commands in the chain target it by window ID, so they keep hitting the same window even after `focus` reorders the window list. In a chain, `move`, `resize`, `snap`, `move-to-screen` and `shake` read bare numbers that fit their own arguments as arguments, not as a window index (`+ shake 20`, `+ move 100 200 800 600`); use `id=` or `title=` to name a different window:
 
 ```sh
 # Snap window 0 to center, then focus and highlight it (selector inherited)
@@ -129,9 +132,26 @@ window-tool --app iTerm info 0 + info 1
 window-tool focus id=2457 + highlight + dim id=2789
 ```
 
+`--app` can be given in any command of a chain, before or after the command name. It applies to that command and every later one, until another command names its own. A command that names a different app from the previous command's does not inherit its window selector, since that window belongs to the other app, so give it one; naming the same app again keeps the selector. Once a chain names an app, later commands that take an optional `--app` (`list`, `save-layout`, `identify`) use it too and cannot go back to all apps; put those first:
+
+```sh
+# Put Safari on the left and Notes on the right
+window-tool --app Safari snap 0 left + --app Notes snap 0 right
+
+# Count two apps' windows in one call
+window-tool --json --app Safari count + --app Notes count
+
+# Fails: Notes's command does not inherit Safari's window 0 (missing_window_selector)
+window-tool --app Safari focus 0 + --app Notes highlight
+```
+
+Each command takes `--app` once; a second one is `repeated_option`. An `--app` with no command after it in its part of the chain (`list + --app Notes`, `count + --app Notes + count`) is `invalid_value`; only a leading `--app Safari + list` belongs to the next command. Both fail before any command runs. Each `results` entry under `--json` has `app`, the bundle ID of the `--app` in effect (`null` when none, or when the command ignores `--app`).
+
+Earlier versions applied one `--app` to the whole chain wherever it appeared, so `focus 0 + highlight --app Safari` now leaves `focus` without an app (`app_required`). To migrate, move `--app` to the first command that needs it, or repeat it in each part of the chain.
+
 A chain stops at the first failing command and exits with that command's error code. With `--keep-going`, the remaining commands still run, each failure is reported on stderr, and the exit code is the first failure's. A later command that omits its selector inherits the one the failed command named. `pick`, `record` and `watch` (on Ctrl-C) end the process when they finish, so they end a chain even with `--keep-going`.
 
-With `--json`, a chain always prints one object, whatever its length and wherever it failed. `results` has one entry per command that ran, in order: `command`, `ok`, and either `data` (what the command prints on its own with `--json`, or `null` for commands that print nothing) or `error` (the same `{code, message, details}` object a single command prints). `failed_at` is the 1-based number of the first failed command, matching `Error in command N` on stderr, or `null` when every command succeeded. Without `--keep-going`, commands after `failed_at` did not run. A single command keeps its bare shape.
+With `--json`, a chain always prints one object, whatever its length and wherever it failed. `results` has one entry per command that ran, in order: `command`, `ok`, `app`, and either `data` (what the command prints on its own with `--json`, or `null` for commands that print nothing) or `error` (the same `{code, message, details}` object a single command prints). `failed_at` is the 1-based number of the first failed command, matching `Error in command N` on stderr, or `null` when every command succeeded. Without `--keep-going`, commands after `failed_at` did not run. A single command keeps its bare shape.
 
 Abbreviated output:
 

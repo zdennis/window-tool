@@ -9,7 +9,8 @@ let VERSION = "0.18.0"
 
 struct Config {
     var bundleId: String = ""
-    var appExplicit: Bool = false
+    /// `--exact`: --app must be a running app's whole name or bundle ID, with no substring matching.
+    var exactApp: Bool = false
     var jsonOutput: Bool = false
     var keepGoing: Bool = false
     var firstMatch: Bool = false
@@ -57,7 +58,10 @@ func printJSON(_ value: Any) {
 /// nothing, an array when it printed more than once), or `error` is the given error object.
 func recordChainResult(error: [String: Any]? = nil) {
     guard config.jsonChaining, let command = config.runningCommand else { return }
-    var entry: [String: Any] = ["command": command, "ok": error == nil]
+    // `app` is the bundle ID of the --app in effect (null when none, or when the command ignores --app).
+    let usesApp = commandSpec(named: command).map { $0.app != .none } ?? false
+    let app = usesApp && !config.bundleId.isEmpty ? try? resolveAppIdentifier(config.bundleId) : nil
+    var entry: [String: Any] = ["command": command, "ok": error == nil, "app": app ?? NSNull()]
     if let error {
         entry["error"] = error
         config.chainFailedAt = config.chainFailedAt ?? config.chainResults.count + 1
@@ -89,7 +93,8 @@ func flushJSONAndExit(_ status: Int32) -> Never {
 // MARK: - Errors
 
 enum WindowToolError: LocalizedError {
-    case appNotFound(String)
+    /// `candidates` is non-nil under `--exact`: the running apps a substring match would have found.
+    case appNotFound(String, candidates: [(name: String, bundleId: String)]? = nil)
     case ambiguousApp(query: String, matches: [(name: String, bundleId: String)])
     case windowIndexOutOfRange(index: Int, count: Int)
     case noWindowMatchingTitle(String)
@@ -125,9 +130,10 @@ enum WindowToolError: LocalizedError {
     case fileNotFound(String, hint: String? = nil)
     /// `hint` replaces the default pointer to id= for commands where a window ID does not help.
     case appRequired(hint: String? = nil)
-    case missingWindowSelector(command: String)
+    /// `hint` is added after the first line (the main loop's catch adds one when a change of --app dropped the inherited selector).
+    case missingWindowSelector(command: String, hint: String? = nil)
     case unknownOption(String, command: String)
-    /// `command` is nil for a repeated global flag (--json, --first, --keep-going), which belongs to no command.
+    /// `command` is nil for a repeated global flag (--json, --first, --keep-going, --exact), which belongs to no command, and for an --app repeated in a chain part that has no command.
     case repeatedOption(String, command: String?)
     case unexpectedArgument(String, command: String, conflictsWith: String? = nil)
     /// `command` is nil when thrown by takeOption; the top-level catch fills it in.
@@ -139,8 +145,12 @@ enum WindowToolError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .appNotFound(let id):
+        case .appNotFound(let id, nil):
             return "Application not found: \(id)"
+        case .appNotFound(let id, let candidates?):
+            let list = candidates.map { "\n  \($0.name) (\($0.bundleId))" }.joined()
+            return "Application not found: \(id). --exact matches a whole app name or bundle ID; drop it for substring matching"
+                + (candidates.isEmpty ? "." : ", which would match:\(list)")
         case .ambiguousApp(let query, let matches):
             let list = matches.map { "  \($0.name) (\($0.bundleId))" }.joined(separator: "\n")
             return "Multiple apps match '\(query)':\n\(list)\nUse a more specific name or the full bundle ID shown above."
@@ -200,9 +210,10 @@ enum WindowToolError: LocalizedError {
         case .fileNotFound(let path, let hint):
             return "File not found: \(path)" + (hint.map { ". \($0)" } ?? "")
         case .appRequired(let hint):
-            return "--app <name> is required for this command. " + (hint ?? "When selecting a window, id=<N> works without it; run 'window-tool list' to see window IDs.")
-        case .missingWindowSelector(let command):
-            return "Missing window selector for '\(command)'. Use an index (0, 1, ...), id=<N>, or title=<pattern>.\nRun 'window-tool \(command) --help' for usage."
+            return "--app <name> is required for this command. " + (hint ?? WindowToolError.appRequiredHint)
+        case .missingWindowSelector(let command, let hint):
+            return "Missing window selector for '\(command)'. Use an index (0, 1, ...), id=<N>, or title=<pattern>.\n" + (hint.map { "\($0)\n" } ?? "")
+                + "Run 'window-tool \(command) --help' for usage."
         case .unknownOption(let option, let command):
             return "Unknown option '\(option)' for '\(command)'. Run 'window-tool \(command) --help'."
         case .repeatedOption(let option, let command):
@@ -225,6 +236,8 @@ enum WindowToolError: LocalizedError {
             return message
         }
     }
+
+    static let appRequiredHint = "When selecting a window, id=<N> works without it; run 'window-tool list' to see window IDs."
 
     /// Stable identifier for scripts, printed as `error.code` under `--json`.
     var code: String {
@@ -269,8 +282,10 @@ enum WindowToolError: LocalizedError {
     /// The values behind the message, printed as `error.details` under `--json`.
     var details: [String: Any] {
         switch self {
-        case .appNotFound(let app):
-            return ["app": app]
+        case .appNotFound(let app, nil):
+            return ["app": app, "exact": false]
+        case .appNotFound(let app, let candidates?):
+            return ["app": app, "exact": true, "candidates": candidates.map { ["name": $0.name, "bundle_id": $0.bundleId] }]
         case .ambiguousApp(let query, let matches):
             return ["query": query, "matches": matches.map { ["name": $0.name, "bundle_id": $0.bundleId] }]
         case .windowIndexOutOfRange(let index, let count), .screenIndexOutOfRange(let index, let count):
@@ -300,7 +315,7 @@ enum WindowToolError: LocalizedError {
             return ["option": option, "command": command]
         case .nothingToUndo(let command):
             return ["command": command ?? NSNull()]
-        case .missingWindowSelector(let command), .missingArguments(let command):
+        case .missingWindowSelector(let command, _), .missingArguments(let command):
             return ["command": command]
         case .fileNotFound(let path, _):
             return ["path": path]
@@ -453,7 +468,7 @@ func rejectUnknownOptions(_ args: [String], command: String) throws {
     if option.contains("="), (["--json"] + specFlags).contains(name) {
         throw WindowToolError.optionTakesNoValue(name, command: command)
     }
-    let known = ["--app", "--json"] + specFlags.map { String($0.prefix { $0 != " " }) }
+    let known = ["--json"] + specFlags.map { String($0.prefix { $0 != " " }) }
     throw known.contains(name)
         ? WindowToolError.repeatedOption(name, command: command)
         : WindowToolError.unknownOption(name, command: command)
@@ -592,9 +607,9 @@ func saveUndoHistory(_ history: [UndoEntry]) throws {
 // MARK: - Accessibility Helpers
 
 /// Resolves an app identifier to a bundle ID.
-/// If the identifier contains a dot, it's treated as an exact bundle ID.
-/// Otherwise, an exact case-insensitive app name wins; failing that, it's matched
+/// An exact bundle ID wins. Otherwise, an exact case-insensitive app name wins; failing that, it's matched
 /// case-insensitively as a substring of app names and bundle IDs of running apps.
+/// With `--exact`, only a whole name or bundle ID (ignoring case) matches, so a newly launched app cannot make it ambiguous.
 func resolveAppIdentifier(_ identifier: String) throws -> String {
     let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
 
@@ -603,7 +618,6 @@ func resolveAppIdentifier(_ identifier: String) throws -> String {
         return identifier
     }
 
-    // Fuzzy match against app names and bundle IDs
     let query = identifier.lowercased()
     var matches: [(name: String, bundleId: String)] = []
     var seen = Set<String>()
@@ -618,6 +632,11 @@ func resolveAppIdentifier(_ identifier: String) throws -> String {
     let exactMatches = matches.filter { $0.name.lowercased() == query }
     if exactMatches.count == 1 {
         return exactMatches[0].bundleId
+    }
+    if config.exactApp {
+        let substringMatches = matches
+        matches = matches.filter { $0.name.lowercased() == query || $0.bundleId.lowercased() == query }
+        if matches.isEmpty { throw WindowToolError.appNotFound(identifier, candidates: substringMatches) }
     }
     if matches.count == 1 {
         return matches[0].bundleId
@@ -4206,6 +4225,7 @@ let commandSpecs: [CommandSpec] = [
 func commandsCommand() {
     if config.jsonOutput {
         printJSON(["version": VERSION, "commands": commandSpecs.map(\.json),
+                   "global_flags": globalFlags.map { ["name": $0.name, "description": $0.description] },
                    "enums": ["snapPositions": SnapPosition.allCases.map(\.rawValue), "colors": validColors, "shells": ["zsh", "bash", "fish"]]] as [String: Any])
     } else {
         print(helpRows(commandSpecs.map { (name: $0.name, description: $0.summary) }).joined(separator: "\n"))
@@ -4255,6 +4275,17 @@ func closestCommandName(to input: String) -> String? {
 
 // MARK: - Main
 
+/// The options that go before or after any command; the top-level help and `commands --json` list them.
+let globalFlags: [(name: String, description: String)] = [
+    ("--app <name-or-id>", "Target application by name or bundle ID (an exact name wins over substrings); in a chain, it applies to its command and later ones"),
+    ("--exact", "Match --app only as a whole app name or bundle ID, ignoring case; applies to every --app in the chain"),
+    ("--json", "Output in JSON format"),
+    ("--keep-going", "In a chain, run the remaining commands after one fails"),
+    ("--first", "With title=, use the first match when several windows match (move, resize and maximize ignore it)"),
+    ("--help, -h", "Show help; after a command, show that command's help"),
+    ("--version, -v", "Print version and exit"),
+]
+
 /// Prints the top-level help: every command grouped as in `commandSpecs`, then selectors, options and chaining.
 func usage() {
     let entries = commandSpecs.map { spec in
@@ -4262,7 +4293,7 @@ func usage() {
     }
     let width = entries.map(\.name.count).max() ?? 0
     var lines = [
-        "Usage: window-tool [--app <name-or-id>] [--json] [--keep-going] [--first] <command> [args...]",
+        "Usage: window-tool [--app <name-or-id>] [--exact] [--json] [--keep-going] [--first] <command> [args...]",
         "       window-tool help <command>        Show one command's arguments and options",
     ]
     for group in CommandGroup.allCases {
@@ -4287,12 +4318,7 @@ func usage() {
       \(validColors.joined(separator: ", "))
 
     Options:
-      --app <name-or-id>  Target application by name or bundle ID
-      --json              Output in JSON format
-      --keep-going        In a chain, run the remaining commands after one fails
-      --first             With title=, use the first match when several windows match (move, resize and maximize ignore it)
-      --help, -h          Show help; after a command, show that command's help
-      --version, -v       Print version and exit
+    \(helpRows(globalFlags).joined(separator: "\n"))
       Options that take a value accept --flag value or --flag=value.
       Unknown options and extra arguments are errors; the command does not run.
 
@@ -4320,8 +4346,12 @@ func usage() {
       shows them. focus, minimize, restore, fullscreen and close are not recorded.
 
     Command chaining:
-      Use + to run multiple commands in sequence, sharing --app and --json flags.
+      Use + to run multiple commands in sequence, sharing --json, --first and --exact.
       Subsequent commands inherit the window selector from the previous command.
+      --app may be given in any command of a chain: it applies to that command and the
+      ones after it. A command that names a different app does not inherit the previous
+      window selector:
+      window-tool --app Safari focus 0 + --app Notes snap 0 left
       Bare numbers that fit a command's arguments are arguments (+ shake 20);
       use id= or title= to name another window:
       window-tool --app Safari snap 0 center + focus + highlight --color red
@@ -4330,8 +4360,9 @@ func usage() {
 
       A chain stops at the first failure unless --keep-going is given; the exit code
       is the first failure's. With --json, a chain prints one object:
-      {"results": [{"command", "ok", "data" or "error"}...], "failed_at": N or null}
-      where N is the 1-based number of the first failed command.
+      {"results": [{"command", "ok", "app", "data" or "error"}...], "failed_at": N or null}
+      where N is the 1-based number of the first failed command, and app is the bundle ID
+      of the --app in effect (null when none, or when the command ignores --app).
 
     Examples:
       window-tool list
@@ -4348,7 +4379,7 @@ func usage() {
 
 var args = Array(CommandLine.arguments.dropFirst())
 
-// Parse the global flags --json, --first and --keep-going. Each may appear once; a repeat is a usage error like a repeated command option.
+// Parse the global flags --json, --first, --keep-going and --exact. Each may appear once; a repeat is a usage error like a repeated command option.
 // --json is read first so the error is reported as JSON when the repeat is of --json itself.
 func takeGlobalFlag(_ name: String) -> Bool {
     let given = takeFlag(name, from: &args)
@@ -4361,33 +4392,7 @@ func takeGlobalFlag(_ name: String) -> Bool {
 if takeGlobalFlag("--json") { config.jsonOutput = true }
 if takeGlobalFlag("--first") { config.firstMatch = true }
 if takeGlobalFlag("--keep-going") { config.keepGoing = true }
-
-// Parse --app flag
-// A missing value (takeOption throws) and an empty one get the same error.
-let missingApp = WindowToolError.invalidValue(name: "--app", expected: "an app name or bundle ID (e.g. --app Finder)", got: "")
-do {
-    if let app = try takeOption("--app", from: &args) {
-        guard !app.isEmpty else { throw missingApp }
-        config.bundleId = app
-        config.appExplicit = true
-    }
-} catch {
-    exitWithError(missingApp)
-}
-
-guard !args.isEmpty else {
-    usage()
-    exit(0)
-}
-
-if args.first == "--version" || args.first == "-v" {
-    if config.jsonOutput {
-        printJSON(["version": VERSION])
-    } else {
-        print("window-tool \(VERSION)")
-    }
-    exit(0)
-}
+if takeGlobalFlag("--exact") { config.exactApp = true }
 
 // Split args on "+" to support chaining multiple commands
 func splitCommands(_ args: [String]) -> [[String]] {
@@ -4405,10 +4410,62 @@ func splitCommands(_ args: [String]) -> [[String]] {
     return commands
 }
 
-let splitGroups = splitCommands(args)
+/// One command of a chain: its args without --app, and the --app it names, if any.
+typealias ChainCommand = (args: [String], app: String?)
+
+/// Returns each command of the chain with the --app it names, taken from before or after its command name. An --app
+/// applies to its command and every later one until another command names one. A leading part that is only --app
+/// (`--app Safari + list`) belongs to the first command. Fails before anything runs on a missing, empty or repeated
+/// --app, or one with no command after it in its part of the chain.
+func takeChainApps(_ parts: [[String]]) throws -> [ChainCommand] {
+    // A missing value (takeOption throws) and an empty one get the same error.
+    let missingApp = WindowToolError.invalidValue(name: "--app", expected: "an app name or bundle ID (e.g. --app Finder)", got: "")
+    var commands: [ChainCommand] = []
+    var leading: String?
+    for var part in parts {
+        var apps: [String] = []
+        do { while let app = try takeOption("--app", from: &part) { apps.append(app) } } catch { throw missingApp }
+        if apps.contains("") { throw missingApp }
+        if apps.count > 1 || (!apps.isEmpty && leading != nil) {
+            throw WindowToolError.repeatedOption("--app", command: part.first)
+        }
+        if part.isEmpty, let app = apps.first {
+            guard commands.isEmpty else {
+                throw WindowToolError.invalidValue(name: "--app", expected: "followed by a command in its part of the chain, as in '+ --app Notes list'", got: app)
+            }
+            leading = app
+        } else {
+            commands.append((part, apps.first ?? leading))
+            leading = nil
+        }
+    }
+    return commands
+}
+
+let chainCommands: [ChainCommand]
+do {
+    chainCommands = try takeChainApps(splitCommands(args))
+} catch {
+    exitWithError(error)
+}
+
+guard let firstArgs = chainCommands.first?.args else {
+    usage()
+    exit(0)
+}
+
+if firstArgs.first == "--version" || firstArgs.first == "-v" {
+    if config.jsonOutput {
+        printJSON(["version": VERSION])
+    } else {
+        print("window-tool \(VERSION)")
+    }
+    exit(0)
+}
+
 // `<command> --help` (or -h) anywhere in a chain shows that command's help and runs nothing.
-let helpTarget = splitGroups.first { $0.dropFirst().contains { $0 == "--help" || $0 == "-h" } }
-let commandGroups = helpTarget.map { [["help", $0[0]]] } ?? splitGroups
+let helpTarget = chainCommands.first { $0.args.dropFirst().contains { $0 == "--help" || $0 == "-h" } }
+let commandGroups: [ChainCommand] = helpTarget.map { [(["help", $0.args[0]], nil)] } ?? chainCommands
 
 /// Runs one command. Each case takes its options from `rest` first, then checks what is left with
 /// `resolveSelectorAndArgs` (commands with one <window>), `rejectUnknownOptions` (commands taking a list of
@@ -4453,7 +4510,7 @@ func runCommand(_ args: [String]) throws {
             }
         }
         try checkArgs(rest, command: command)
-        let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
+        let resolvedBundleId: String? = config.bundleId.isEmpty ? nil : try resolveAppIdentifier(config.bundleId)
         try listCommand(bundleId: resolvedBundleId, titleGlob: titleGlob, screen: screen, visibleOnly: visibleOnly,
                         excludeMinimized: excludeMinimized, sort: sort, idsOnly: idsOnly, fields: fields, includeAll: includeAll)
     case "info":
@@ -4674,7 +4731,7 @@ func runCommand(_ args: [String]) throws {
         let identifyDuration = try takeOption("--duration", from: &rest).map { try parseDouble($0, label: "duration") } ?? 3.0
         let identifyColor = try takeOption("--color", from: &rest).map(parseColor) ?? .magenta
         try checkArgs(rest, command: command)
-        let resolvedBundleId: String? = config.appExplicit ? try resolveAppIdentifier(config.bundleId) : nil
+        let resolvedBundleId: String? = config.bundleId.isEmpty ? nil : try resolveAppIdentifier(config.bundleId)
         try identifyCommand(bundleId: resolvedBundleId, duration: identifyDuration, color: identifyColor)
     case "border":
         let borderFlags = try parseBorderFlags(&rest)
@@ -4745,8 +4802,18 @@ config.jsonChaining = config.jsonOutput && config.chaining
 
 // With --keep-going, a failed command is reported and the chain goes on; the exit code is the first failure's.
 var firstFailureCode: Int32?
-for (index, group) in commandGroups.enumerated() {
+for (index, (group, app)) in commandGroups.enumerated() {
     config.runningCommand = group[0]
+    // A command that names a different app from the previous command's does not inherit its window, which belongs to that app.
+    var droppedSelector = false
+    if let app {
+        let resolve = { (app: String) in app.isEmpty ? "" : (try? resolveAppIdentifier(app)) ?? app }
+        if config.lastSelector != nil, resolve(app) != resolve(config.bundleId) {
+            config.lastSelector = nil
+            droppedSelector = true
+        }
+        config.bundleId = app
+    }
     do {
         try runCommand(group)
         recordUndoEntry(group)
@@ -4762,8 +4829,17 @@ for (index, group) in commandGroups.enumerated() {
         commandWarnings = []
         commandResultFields = [:]
         var error = error
-        if case WindowToolError.optionNeedsValue(let option, nil) = error {
+        switch error {
+        case WindowToolError.optionNeedsValue(let option, nil):
             error = WindowToolError.optionNeedsValue(option, command: group[0])
+        case WindowToolError.appRequired(let hint) where commandGroups.dropFirst(index + 1).contains(where: { $0.app != nil }):
+            error = WindowToolError.appRequired(hint: (hint ?? WindowToolError.appRequiredHint)
+                + " --app applies to its own command and later ones; put it on or before the first command that needs it.")
+        case WindowToolError.missingWindowSelector(let command, nil) where droppedSelector:
+            error = WindowToolError.missingWindowSelector(command: command,
+                hint: "A command that names a different --app does not inherit the previous command's window.")
+        default:
+            break
         }
         let prefix = commandGroups.count > 1 ? "Error in command \(index + 1) (\(group[0]))" : "Error"
         guard config.keepGoing else { exitWithError(error, prefix: prefix) }

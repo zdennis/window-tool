@@ -17,6 +17,7 @@ Without `--json`, prints each command with its one-line summary. With `--json`, 
 |-----|-------------|
 | `version` | The `window-tool` version |
 | `commands` | One object per command (below) |
+| `global_flags` | Array of `{name, description}` objects for the options that apply to every command (`--app`, `--exact`, `--json`, `--keep-going`, `--first`, `--help`, `--version`), as listed under "Options" in `help` |
 | `enums` | Valid values for the main enum-like arguments: `snapPositions`, `colors`, `shells` |
 
 Each entry in `commands` has:
