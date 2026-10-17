@@ -16,7 +16,7 @@ window-tool active-window [--id]
 
 ## Details
 
-Reports the primary window of the currently focused application. Without `--id`, prints the same detailed info as `info` (index, window_id, title, position, size, focused, minimized, fullscreen, etc.). With `--id`, prints only the numeric CGWindowID, useful for scripting and shell integration.
+Reports the primary window of the currently focused application. Without `--id`, prints the same detailed info as `info` (index, window_id, title, position, size, focused, minimized, fullscreen, etc.). With `--id`, prints only the numeric CGWindowID, useful for scripting and shell integration. With `--json`, `--id` prints `{"window_id": N}`. If the window has no window ID, `--id` fails with an error and exit status 1 instead of printing nothing.
 
 ## Examples
 

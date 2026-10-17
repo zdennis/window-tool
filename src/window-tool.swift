@@ -967,7 +967,10 @@ func activeWindowCommand(idOnly: Bool) throws {
     }
 
     if idOnly {
-        if let wid = w.windowID { print(wid) }
+        guard let wid = w.windowID else {
+            throw WindowToolError.operationFailed("The active window has no window ID. Select a window with an index or title=<pattern> instead.")
+        }
+        if config.jsonOutput { printJSON(["window_id": Int(wid)]) } else { print(wid) }
     } else {
         printWindowInfo(w, bundleId: bundleId)
     }
@@ -2446,11 +2449,18 @@ func pickCommand() {
 
 struct WindowSnapshot: Codable {
     let index: Int
+    /// Absent in layouts saved before window IDs were recorded, and for windows without one.
+    let windowID: Int?
     let title: String
     let x: Int
     let y: Int
     let width: Int
     let height: Int
+
+    enum CodingKeys: String, CodingKey {
+        case index, title, x, y, width, height
+        case windowID = "window_id"
+    }
 }
 
 struct WindowLayout: Codable {
@@ -2468,7 +2478,7 @@ func saveLayoutCommand(bundleId: String, filePath: String) throws {
     let app = try requireApp(bundleId)
     let windows = getWindows(appElement: app)
     let snapshots = windows.map { w in
-        WindowSnapshot(index: w.id, title: w.title,
+        WindowSnapshot(index: w.id, windowID: w.windowID.map { Int($0) }, title: w.title,
                        x: Int(w.position.x), y: Int(w.position.y),
                        width: Int(w.size.width), height: Int(w.size.height))
     }
@@ -2479,6 +2489,14 @@ func saveLayoutCommand(bundleId: String, filePath: String) throws {
     try data.write(to: URL(fileURLWithPath: filePath))
     if config.jsonOutput, var saved = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
         saved["path"] = filePath
+        // Each window object carries its owner's bundle_id like every other JSON window; the file keeps it once at the top.
+        if let windows = saved["windows"] as? [[String: Any]] {
+            saved["windows"] = windows.map { window -> [String: Any] in
+                var window = window
+                window["bundle_id"] = bundleId
+                return window
+            }
+        }
         printJSON(saved)
     }
     printStatus("Saved \(windows.count) window(s) to \(filePath)")
@@ -2530,6 +2548,7 @@ func watchCommand(bundleId: String, interval: Double) throws {
     let app = try requireApp(bundleId)
 
     struct WindowState: Equatable {
+        let windowID: Int?
         let title: String
         let x: Int
         let y: Int
@@ -2539,15 +2558,20 @@ func watchCommand(bundleId: String, interval: Double) throws {
 
     func snapshot() -> [WindowState] {
         let windows = getWindows(appElement: app)
-        return windows.map { WindowState(title: $0.title, x: Int($0.position.x), y: Int($0.position.y),
-                                          width: Int($0.size.width), height: Int($0.size.height)) }
+        return windows.map {
+            WindowState(windowID: $0.windowID.map { Int($0) }, title: $0.title,
+                        x: Int($0.position.x), y: Int($0.position.y),
+                        width: Int($0.size.width), height: Int($0.size.height))
+        }
     }
 
     func printState(_ windows: [WindowState]) {
         if config.jsonOutput {
             let items = windows.enumerated().map { (i, w) in
-                ["index": i, "x": w.x, "y": w.y,
-                 "width": w.width, "height": w.height, "title": w.title] as [String: Any]
+                var dict: [String: Any] = ["bundle_id": bundleId, "index": i, "x": w.x, "y": w.y,
+                                           "width": w.width, "height": w.height, "title": w.title]
+                if let wid = w.windowID { dict["window_id"] = wid }
+                return dict
             }
             printJSON(items)
         } else {

@@ -16,7 +16,7 @@ window-tool --app <name-or-id> watch [--interval <seconds>]
 
 ## Details
 
-Prints the current window state, then polls for changes at the given interval. When a change is detected (position, size, or title), prints the updated state separated by `---`. With `--json`, outputs JSON arrays without the separator.
+Prints the current window state, then polls for changes at the given interval. When a change is detected (position, size, title, or window ID), prints the updated state (a window whose ID changed counts too) separated by `---`. With `--json`, outputs JSON arrays without the separator; each window object has `bundle_id` and, when the window has one, `window_id`.
 
 `--interval` is the canonical form. A bare number (`watch 0.5`) is still accepted as the interval, but not together with `--interval`.
 
