@@ -58,6 +58,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `commands` | [README](docs/README.commands.md) | List every command; with `--json`, its arguments, options and whether it mutates |
 | `count` | [README](docs/README.count.md) | Print number of windows |
 | `dim` | [README](docs/README.dim.md) | Dim everything except a window |
+| `doctor` | [README](docs/README.doctor.md) | Report the version and whether Accessibility and Screen Recording are granted |
 | `flash` | [README](docs/README.flash.md) | Flash a colored overlay on a window |
 | `focus` | [README](docs/README.focus.md) | Bring a window to front |
 | `fullscreen` | [README](docs/README.fullscreen.md) | Enter macOS fullscreen mode |
@@ -99,7 +100,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `--keep-going` | In a chain, run the remaining commands after one fails; exit with the first failure's code (see [Command chaining](#command-chaining)) |
 | `--first` | With `title=`, use the first match when several windows match instead of failing; `move`, `resize` and `maximize` ignore it |
 | `--help`, `-h` | Show help; after a command, show that command's help without running it |
-| `--version`, `-v` | Print version and exit |
+| `--version`, `-v` | Print version and exit; with `--json`, `{"version": ...}` |
 
 Options that take a value accept both `--flag value` and `--flag=value` (`--size 800` or `--size=800`, `--app Safari` or `--app=Safari`).
 

@@ -2979,6 +2979,9 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "commands", group: .meta, app: .none, mutates: false,
                 summary: "List every command; with --json, its arguments, options, --app usage and whether it mutates",
                 needsAccessibility: false),
+    CommandSpec(name: "doctor", group: .meta, app: .none, mutates: false,
+                summary: "Report the version and whether Accessibility and Screen Recording are granted",
+                needsAccessibility: false),
     CommandSpec(name: "shell-init", group: .meta, app: .none, mutates: false, synopsis: "<shell>",
                 summary: "Print a shell integration snippet",
                 arguments: [("<shell>", "zsh, bash or fish")], needsAccessibility: false),
@@ -2991,6 +2994,22 @@ func commandsCommand() {
                    "enums": ["snapPositions": SnapPosition.allCases.map(\.rawValue), "colors": validColors, "shells": ["zsh", "bash", "fish"]]] as [String: Any])
     } else {
         print(helpRows(commandSpecs.map { (name: $0.name, description: $0.summary) }).joined(separator: "\n"))
+    }
+}
+
+/// Reports the version and the two permissions the tool depends on, so a script can check before it runs anything.
+func doctorCommand() {
+    let accessibility = AXIsProcessTrusted()
+    let screenRecording = CGPreflightScreenCaptureAccess()
+    if config.jsonOutput {
+        printJSON(["version": VERSION, "accessibility": accessibility, "screenRecording": screenRecording] as [String: Any])
+    } else {
+        func row(_ name: String, _ granted: Bool, _ needed: String) -> String {
+            "\(name.padding(toLength: 17, withPad: " ", startingAt: 0))\(granted ? "granted" : "missing")  (\(needed))"
+        }
+        print("window-tool \(VERSION)")
+        print(row("Accessibility", accessibility, "needed by every command that reads or changes windows"))
+        print(row("Screen Recording", screenRecording, "needed by preview and record"))
     }
 }
 
@@ -3141,7 +3160,11 @@ guard !args.isEmpty else {
 }
 
 if args.first == "--version" || args.first == "-v" {
-    print("window-tool \(VERSION)")
+    if config.jsonOutput {
+        printJSON(["version": VERSION])
+    } else {
+        print("window-tool \(VERSION)")
+    }
     exit(0)
 }
 
@@ -3375,6 +3398,9 @@ func runCommand(_ args: [String]) throws {
             throw WindowToolError.missingArguments(command: "shell-init")
         }
         try shellInitCommand(shell: shell)
+    case "doctor":
+        try checkArgs(rest, command: command)
+        doctorCommand()
     case "commands":
         try checkArgs(rest, command: command)
         commandsCommand()
