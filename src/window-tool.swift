@@ -517,6 +517,9 @@ func getCGWindowID(_ element: AXUIElement) -> CGWindowID? {
     return result == .success ? windowID : nil
 }
 
+/// Rounds an AX position or size to the nearest integer (AX reports fractional values on Retina displays). Capture pixel sizes in preview/record deliberately keep truncating.
+func roundedInt(_ v: CGFloat) -> Int { Int(v.rounded()) }
+
 @_silgen_name("_AXUIElementGetWindow")
 func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
@@ -645,17 +648,17 @@ func reportAffectedWindows(asJSON: Bool) {
         var problems = affected.failures
         if problems.isEmpty, let frame = currentFrame(of: affected.element) {
             if let p = affected.position, abs(frame.origin.x - p.x) > 2 || abs(frame.origin.y - p.y) > 2 {
-                problems.append("position requested \(Int(p.x)),\(Int(p.y)) but is \(Int(frame.origin.x)),\(Int(frame.origin.y))")
+                problems.append("position requested \(roundedInt(p.x)),\(roundedInt(p.y)) but is \(roundedInt(frame.origin.x)),\(roundedInt(frame.origin.y))")
             }
             if let s = affected.size, abs(frame.size.width - s.width) > 2 || abs(frame.size.height - s.height) > 2 {
-                problems.append("size requested \(Int(s.width))x\(Int(s.height)) but is \(Int(frame.size.width))x\(Int(frame.size.height))")
+                problems.append("size requested \(roundedInt(s.width))x\(roundedInt(s.height)) but is \(roundedInt(frame.size.width))x\(roundedInt(frame.size.height))")
             }
         }
         warnings += problems.map { "\(label): \($0)" }
         guard asJSON, var window = affectedWindowJSON(affected.element) else { continue }
         var requested: [String: Int] = [:]
-        if let p = affected.position { requested["x"] = Int(p.x); requested["y"] = Int(p.y) }
-        if let s = affected.size { requested["width"] = Int(s.width); requested["height"] = Int(s.height) }
+        if let p = affected.position { requested["x"] = roundedInt(p.x); requested["y"] = roundedInt(p.y) }
+        if let s = affected.size { requested["width"] = roundedInt(s.width); requested["height"] = roundedInt(s.height) }
         if !requested.isEmpty { window["requested"] = requested }
         windows.append(window)
     }
@@ -888,10 +891,10 @@ func screenJSON(index: Int, screen: NSScreen, mouseLocation: NSPoint) -> [String
     let visible = cocoaToAX(rect: screen.visibleFrame)
     return [
         "index": index,
-        "frame_x": Int(frame.origin.x), "frame_y": Int(frame.origin.y),
-        "frame_width": Int(frame.width), "frame_height": Int(frame.height),
-        "visible_x": Int(visible.origin.x), "visible_y": Int(visible.origin.y),
-        "visible_width": Int(visible.width), "visible_height": Int(visible.height),
+        "frame_x": roundedInt(frame.origin.x), "frame_y": roundedInt(frame.origin.y),
+        "frame_width": roundedInt(frame.width), "frame_height": roundedInt(frame.height),
+        "visible_x": roundedInt(visible.origin.x), "visible_y": roundedInt(visible.origin.y),
+        "visible_width": roundedInt(visible.width), "visible_height": roundedInt(visible.height),
         "scale": Double(screen.backingScaleFactor),
         "main": screen == NSScreen.main,
         "mouse": screen.frame.contains(mouseLocation)
@@ -921,8 +924,8 @@ func screensCommand() {
 func windowInfoJSON(_ w: WindowInfo, bundleId: String? = nil) -> [String: Any] {
     var dict: [String: Any] = [
         "title": w.title,
-        "x": Int(w.position.x), "y": Int(w.position.y),
-        "width": Int(w.size.width), "height": Int(w.size.height),
+        "x": roundedInt(w.position.x), "y": roundedInt(w.position.y),
+        "width": roundedInt(w.size.width), "height": roundedInt(w.size.height),
         "minimized": axBool(w.element, kAXMinimizedAttribute as String),
         "fullscreen": axBool(w.element, "AXFullScreen"),
         "focused": axBool(w.element, kAXFocusedAttribute as String),
@@ -955,8 +958,8 @@ func printWindowInfo(_ w: WindowInfo, bundleId: String? = nil) {
         if let parent = w.parentIndex { print("parent_index:\t\(parent)") } else { print("index:\t\(w.id)") }
         if let wid = w.windowID { print("window_id:\t\(wid)") }
         print("title:\t\(w.title)")
-        print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")
-        print("size:\t\(Int(w.size.width))x\(Int(w.size.height))")
+        print("position:\t\(roundedInt(w.position.x)),\(roundedInt(w.position.y))")
+        print("size:\t\(roundedInt(w.size.width))x\(roundedInt(w.size.height))")
         if let role = role { print("role:\t\(role)") }
         if let subrole = subrole { print("subrole:\t\(subrole)") }
         print("focused:\t\(focused)")
@@ -1069,8 +1072,8 @@ func listCommand(bundleId: String?) throws {
         for w in windows {
             entries.append(WindowEntry(app: appName, bundleId: bundleId, index: w.id,
                                        windowID: w.windowID,
-                                       x: Int(w.position.x), y: Int(w.position.y),
-                                       width: Int(w.size.width), height: Int(w.size.height),
+                                       x: roundedInt(w.position.x), y: roundedInt(w.position.y),
+                                       width: roundedInt(w.size.width), height: roundedInt(w.size.height),
                                        title: w.title))
         }
     } else {
@@ -1087,8 +1090,8 @@ func listCommand(bundleId: String?) throws {
                 for w in windows {
                     entries.append(WindowEntry(app: appName, bundleId: bid, index: w.id,
                                                windowID: w.windowID,
-                                               x: Int(w.position.x), y: Int(w.position.y),
-                                               width: Int(w.size.width), height: Int(w.size.height),
+                                               x: roundedInt(w.position.x), y: roundedInt(w.position.y),
+                                               width: roundedInt(w.size.width), height: roundedInt(w.size.height),
                                                title: w.title))
                 }
             }
@@ -1755,10 +1758,10 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
                 snapshots.append(SidebarWindowSnapshot(
                     bundleId: bid,
                     windowID: wid,
-                    x: Int(win.position.x),
-                    y: Int(win.position.y),
-                    width: Int(win.size.width),
-                    height: Int(win.size.height)
+                    x: roundedInt(win.position.x),
+                    y: roundedInt(win.position.y),
+                    width: roundedInt(win.size.width),
+                    height: roundedInt(win.size.height)
                 ))
 
                 // Check overlap with sidebar
@@ -2495,8 +2498,8 @@ func saveLayoutCommand(bundleId: String, filePath: String) throws {
     let windows = getWindows(appElement: app)
     let snapshots = windows.map { w in
         WindowSnapshot(index: w.id, windowID: w.windowID.map { Int($0) }, title: w.title,
-                       x: Int(w.position.x), y: Int(w.position.y),
-                       width: Int(w.size.width), height: Int(w.size.height))
+                       x: roundedInt(w.position.x), y: roundedInt(w.position.y),
+                       width: roundedInt(w.size.width), height: roundedInt(w.size.height))
     }
     let layout = WindowLayout(bundleId: bundleId, windows: snapshots)
     let encoder = JSONEncoder()
@@ -2576,8 +2579,8 @@ func watchCommand(bundleId: String, interval: Double) throws {
         let windows = getWindows(appElement: app)
         return windows.map {
             WindowState(windowID: $0.windowID.map { Int($0) }, title: $0.title,
-                        x: Int($0.position.x), y: Int($0.position.y),
-                        width: Int($0.size.width), height: Int($0.size.height))
+                        x: roundedInt($0.position.x), y: roundedInt($0.position.y),
+                        width: roundedInt($0.size.width), height: roundedInt($0.size.height))
         }
     }
 
@@ -2682,10 +2685,10 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
         snapshots.append(TileWindowSnapshot(
             bundleId: bundleId,
             windowID: wid,
-            x: Int(win.position.x),
-            y: Int(win.position.y),
-            width: Int(win.size.width),
-            height: Int(win.size.height)
+            x: roundedInt(win.position.x),
+            y: roundedInt(win.position.y),
+            width: roundedInt(win.size.width),
+            height: roundedInt(win.size.height)
         ))
     }
     let encoder = JSONEncoder()
