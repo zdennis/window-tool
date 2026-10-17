@@ -88,6 +88,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `snap` | [README](docs/README.snap.md) | Snap a window to a screen region, thirds, or a fractional `--rect` |
 | `stack` | [README](docs/README.stack.md) | Cascade all or selected windows with an offset |
 | `tile` | [README](docs/README.tile.md) | Tile windows in a grid layout |
+| `tree` | [README](docs/README.tree.md) | Print a window's accessibility element tree: role, title, value, frame and actions, with a path per element (`--depth N`, `--max-value N`) |
 | `unborder` | [README](docs/README.unborder.md) | Remove border overlays for an app |
 | `unborder-all` | [README](docs/README.unborder-all.md) | Remove all active borders |
 | `undim` | [README](docs/README.undim.md) | Remove active dim overlay |

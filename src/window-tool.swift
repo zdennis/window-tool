@@ -343,6 +343,14 @@ func parsePositiveInt(_ s: String, label: String) throws -> Int {
     return v
 }
 
+/// A whole number 0 or more, and at most `max` when given.
+func parseNonNegativeInt(_ s: String, label: String, max: Int? = nil) throws -> Int {
+    guard let v = Int(s), v >= 0, v <= max ?? Int.max else {
+        throw WindowToolError.invalidValue(name: label, expected: max.map { "a whole number from 0 to \($0)" } ?? "a whole number, 0 or more", got: s)
+    }
+    return v
+}
+
 func parsePositiveDouble(_ s: String, label: String) throws -> Double {
     guard let v = Double(s), v.isFinite, v > 0 else {
         throw WindowToolError.invalidValue(name: label, expected: "a number greater than 0", got: s)
@@ -602,6 +610,14 @@ struct WindowInfo {
     let windowID: CGWindowID?
 }
 
+/// Decodes a point or size from an AX attribute value, or returns nil when the value is missing, is another type,
+/// or is the error value `AXUIElementCopyMultipleAttributeValues` returns for a missing attribute.
+func axValue<T: BitwiseCopyable>(_ ref: Any?, _ type: AXValueType, _ empty: T) -> T? {
+    guard let ref, CFGetTypeID(ref as CFTypeRef) == AXValueGetTypeID() else { return nil }
+    var value = empty
+    return AXValueGetValue(ref as! AXValue, type, &value) ? value : nil
+}
+
 /// Builds a WindowInfo from an AXUIElement window, or returns nil if position/size can't be read.
 func makeWindowInfo(element: AXUIElement, id: Int, parentIndex: Int? = nil) -> WindowInfo? {
     var titleRef: CFTypeRef?
@@ -610,17 +626,11 @@ func makeWindowInfo(element: AXUIElement, id: Int, parentIndex: Int? = nil) -> W
 
     var posRef: CFTypeRef?
     AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef)
-    var position = CGPoint.zero
-    if let posRef = posRef {
-        AXValueGetValue(posRef as! AXValue, .cgPoint, &position)
-    }
+    let position = axValue(posRef, .cgPoint, CGPoint.zero) ?? .zero
 
     var sizeRef: CFTypeRef?
     AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
-    var size = CGSize.zero
-    if let sizeRef = sizeRef {
-        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
-    }
+    let size = axValue(sizeRef, .cgSize, CGSize.zero) ?? .zero
 
     return WindowInfo(element: element, id: id, parentIndex: parentIndex, title: title, position: position, size: size, windowID: getCGWindowID(element))
 }
@@ -630,13 +640,11 @@ func currentFrame(of element: AXUIElement) -> CGRect? {
     var posRef: CFTypeRef?
     var sizeRef: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
-          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success else {
+          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+          let position = axValue(posRef, .cgPoint, CGPoint.zero),
+          let size = axValue(sizeRef, .cgSize, CGSize.zero) else {
         return nil
     }
-    var position = CGPoint.zero
-    var size = CGSize.zero
-    AXValueGetValue(posRef as! AXValue, .cgPoint, &position)
-    AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
     return CGRect(origin: position, size: size)
 }
 
@@ -2198,6 +2206,146 @@ func infoCommand(bundleId: String, selector: WindowSelector) throws {
     printWindowInfo(w)
 }
 
+/// The attributes `tree` reads for each element, fetched with one call per element.
+let treeAttributes = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute,
+                      kAXValueAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute]
+
+/// Deepest `--depth` `tree` accepts; it also bounds the recursion if an app reports an element as its own descendant.
+let maxTreeDepth = 100
+
+/// An AX value as JSON: strings, finite numbers, booleans and URLs; nil for anything else (points, ranges, elements).
+func treeValue(_ value: Any) -> Any? {
+    if CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID() { return value as? Bool }
+    if let string = value as? String { return string.isEmpty ? nil : string }
+    if let number = value as? NSNumber { return number.doubleValue.isFinite ? number : nil }
+    if let url = value as? URL { return url.absoluteString }
+    return nil
+}
+
+/// One element of `tree`: its `path` (child indexes from the window, dot-separated; "" for the window), role, subrole,
+/// title, description, identifier, value (strings cut to `maxValue` characters unless it is 0, with `value_truncated`),
+/// frame (x, y, width, height) and actions, then its children for `depth` more levels. Missing and empty attributes are
+/// left out. When `depth` stops the walk, an element with children gets `children_omitted` (their number) instead of `children`.
+func treeNode(_ element: AXUIElement, path: String = "", depth: Int, maxValue: Int) -> [String: Any] {
+    var valuesRef: CFArray?
+    AXUIElementCopyMultipleAttributeValues(element, treeAttributes as CFArray, [], &valuesRef)
+    // The values come back in treeAttributes order.
+    let attributes = Dictionary(uniqueKeysWithValues: zip(treeAttributes, valuesRef as? [Any] ?? []))
+
+    var node: [String: Any] = ["path": path]
+    for (key, name) in [("role", kAXRoleAttribute), ("subrole", kAXSubroleAttribute), ("title", kAXTitleAttribute),
+                        ("description", kAXDescriptionAttribute), ("identifier", kAXIdentifierAttribute)] {
+        if let string = attributes[name] as? String, !string.isEmpty { node[key] = string }
+    }
+    if let value = attributes[kAXValueAttribute].flatMap(treeValue) {
+        if let string = value as? String, maxValue > 0, string.count > maxValue {
+            node["value"] = String(string.prefix(maxValue))
+            node["value_truncated"] = true
+        } else {
+            node["value"] = value
+        }
+    }
+    if let position = axValue(attributes[kAXPositionAttribute], .cgPoint, CGPoint.zero),
+       let size = axValue(attributes[kAXSizeAttribute], .cgSize, CGSize.zero) {
+        node["x"] = roundedInt(position.x)
+        node["y"] = roundedInt(position.y)
+        node["width"] = roundedInt(size.width)
+        node["height"] = roundedInt(size.height)
+    }
+    var actionsRef: CFArray?
+    AXUIElementCopyActionNames(element, &actionsRef)
+    node["actions"] = actionsRef as? [String] ?? []
+
+    let children = attributes[kAXChildrenAttribute] as? [AXUIElement] ?? []
+    if !children.isEmpty {
+        if depth > 0 {
+            node["children"] = children.enumerated().map { index, child in
+                treeNode(child, path: path.isEmpty ? "\(index)" : "\(path).\(index)", depth: depth - 1, maxValue: maxValue)
+            }
+        } else {
+            node["children_omitted"] = children.count
+        }
+    }
+    return node
+}
+
+/// Escapes a string for one line of `tree` text output: backslash, quote, every control character, and U+2028/U+2029,
+/// so a value cannot break the line or send terminal escape sequences.
+func treeEscape(_ string: String) -> String {
+    var escaped = ""
+    for scalar in string.unicodeScalars {
+        switch scalar {
+        case "\\": escaped += "\\\\"
+        case "\"": escaped += "\\\""
+        case "\n": escaped += "\\n"
+        case "\r": escaped += "\\r"
+        case "\t": escaped += "\\t"
+        case _ where scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value) || scalar.value == 0x2028 || scalar.value == 0x2029:
+            escaped += "\\u{\(String(scalar.value, radix: 16))}"
+        default: escaped.unicodeScalars.append(scalar)
+        }
+    }
+    return escaped
+}
+
+/// A string for one line of `tree` text output: cut to 80 characters, then escaped and quoted.
+func treeDisplayString(_ string: String) -> String {
+    "\"" + treeEscape(string.count > 80 ? string.prefix(79) + "…" : string) + "\""
+}
+
+/// An action name for `tree` text output. AppKit custom actions are "Name:<name>\nTarget:…\nSelector:…"; only the name is shown.
+func treeDisplayAction(_ action: String) -> String {
+    guard action.hasPrefix("Name:") else { return treeEscape(action) }
+    return treeEscape(String(action.dropFirst(5).prefix { !$0.isNewline }))
+}
+
+/// Prints a `treeNode` and its children as indented lines, two spaces per level, each but the window's starting
+/// with its `[path]`. The root may carry `window_id` (added by `treeCommand`). Returns whether any element had children cut off by --depth.
+@discardableResult
+func printTreeNode(_ node: [String: Any], level: Int = 0) -> Bool {
+    var parts = [[node["role"], node["subrole"]].compactMap { ($0 as? String).map(treeEscape) }.joined(separator: ":")]
+    if parts[0].isEmpty { parts[0] = "(no role)" }
+    if let path = node["path"] as? String, !path.isEmpty { parts[0] = "[\(path)] " + parts[0] }
+    if let windowID = node["window_id"] { parts.append("window_id=\(windowID)") }
+    for key in ["title", "description", "identifier"] {
+        if let string = node[key] as? String { parts.append("\(key)=\(treeDisplayString(string))") }
+    }
+    if let value = node["value"] {
+        // A value cut by --max-value gets "…", as one cut for display does.
+        let truncated = node["value_truncated"] as? Bool == true
+        parts.append("value=" + ((value as? String).map { treeDisplayString(truncated ? $0 + "…" : $0) } ?? "\(value)"))
+    }
+    if let x = node["x"], let y = node["y"], let width = node["width"], let height = node["height"] {
+        parts.append("frame=\(x),\(y) \(width)x\(height)")
+    }
+    if let actions = node["actions"] as? [String], !actions.isEmpty {
+        parts.append("actions=" + actions.map(treeDisplayAction).joined(separator: ","))
+    }
+    var cutOff = false
+    if let omitted = node["children_omitted"] as? Int {
+        parts.append("children_omitted=\(omitted)")
+        cutOff = true
+    }
+    print(String(repeating: "  ", count: level) + parts.joined(separator: "  "))
+    for child in node["children"] as? [[String: Any]] ?? [] {
+        cutOff = printTreeNode(child, level: level + 1) || cutOff
+    }
+    return cutOff
+}
+
+/// Prints a window's accessibility element tree, `depth` levels below the window. The root also gets `window_id`.
+func treeCommand(bundleId: String, selector: WindowSelector, depth: Int, maxValue: Int) throws {
+    let w = try resolveWindow(bundleId: bundleId, selector: selector)
+    var root = treeNode(w.element, depth: depth, maxValue: maxValue)
+    if let windowID = w.windowID { root["window_id"] = Int(windowID) }
+    if config.jsonOutput {
+        printJSON(root)
+    } else if printTreeNode(root) {
+        fflush(stdout)
+        fputs("Some elements have children_omitted: raise --depth to show them.\n", stderr)
+    }
+}
+
 // MARK: - Wait Command
 
 /// Polls until the selected window exists (or with `gone`, no longer exists), and with `stable` has kept the same
@@ -3532,6 +3680,10 @@ let commandSpecs: [CommandSpec] = [
                 resolvesOwnApp: true),
     CommandSpec(name: "info", group: .query, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Show detailed info for a window"),
+    CommandSpec(name: "tree", group: .query, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Print a window's accessibility element tree: role, title, value, frame and actions",
+                flags: [("--depth N", "Levels below the window to show, 0 to 100 (default: 10); web content can print thousands of lines, so lower it there"),
+                        ("--max-value N", "Cut string values to N characters, 0 for no limit (default: 200); --json marks a cut value with value_truncated")]),
     CommandSpec(name: "count", group: .query, app: .required, mutates: false,
                 summary: "Print the number of windows for --app"),
     CommandSpec(name: "active-window", group: .query, app: .none, mutates: false,
@@ -3944,6 +4096,10 @@ func runCommand(_ args: [String]) throws {
                         excludeMinimized: excludeMinimized, sort: sort, idsOnly: idsOnly, fields: fields, includeAll: includeAll)
     case "info":
         try infoCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
+    case "tree":
+        let depth = try takeOption("--depth", from: &rest).map { try parseNonNegativeInt($0, label: "--depth", max: maxTreeDepth) } ?? 10
+        let maxValue = try takeOption("--max-value", from: &rest).map { try parseNonNegativeInt($0, label: "--max-value") } ?? 200
+        try treeCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector, depth: depth, maxValue: maxValue)
     case "columnize":
         let gap = try takeOption("--gap", from: &rest).map { try parseInt($0, label: "gap") } ?? 10
         try rejectUnknownOptions(rest, command: command)
