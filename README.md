@@ -67,6 +67,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `highlight` | [README](docs/README.highlight.md) | Briefly highlight a window with a border (blocks until it dismisses) |
 | `identify` | [README](docs/README.identify.md) | Show window IDs on all windows (blocks while shown) |
 | `info` | [README](docs/README.info.md) | Show detailed info for a window |
+| `layouts` | [README](docs/README.layouts.md) | List the named layouts saved with `save-layout <name>` |
 | `list` | [README](docs/README.list.md) | List windows (all apps, or one app with --app) |
 | `maximize` | [README](docs/README.maximize.md) | Maximize a window to fill screen |
 | `minimize` | [README](docs/README.minimize.md) | Minimize a window |
@@ -78,8 +79,8 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `record` | [README](docs/README.record.md) | Record video of a window |
 | `resize` | [README](docs/README.resize.md) | Resize a window |
 | `restore` | [README](docs/README.restore.md) | Restore minimized windows, or one window |
-| `restore-layout` | [README](docs/README.restore-layout.md) | Restore window layout from a JSON file |
-| `save-layout` | [README](docs/README.save-layout.md) | Save window layout to a JSON file |
+| `restore-layout` | [README](docs/README.restore-layout.md) | Move windows back to a saved layout (`--launch`, `--dry-run`) |
+| `save-layout` | [README](docs/README.save-layout.md) | Save the windows of every app, or one app, as a named layout or to a file |
 | `screens` | [README](docs/README.screens.md) | List all displays with bounds and scale in window coordinates |
 | `shake` | [README](docs/README.shake.md) | Shake a window to draw attention |
 | `shell-init` | [README](docs/README.shell-init.md) | Print shell integration snippet |
@@ -177,7 +178,7 @@ New error codes may be added; match on the exit code for the category and on `co
 
 ### Mutating command results
 
-With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `close`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`, `undo`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed or the windows are gone (`close`; `restore` with no minimized windows, `restore-layout` with no matching windows). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`, with `window_id` and `bundle_id` on each window; `watch` and `list` windows carry both too.
+With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `close`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`, `undo`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed or the windows are gone (`close`; `restore` with no minimized windows, `restore-layout` with no matching windows). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`, with `window_id` and `bundle_id` on each window; `watch` and `list` windows carry both too. `restore-layout` also adds `restored` and `total` (saved windows moved, and in the layout); `restore-layout --dry-run` moves nothing and prints `{"plan": [...], "warnings": [...]}` instead.
 
 After a move or resize, window-tool re-reads the frame. When a set call failed, or the frame differs from the request by more than 2 points (a window with a minimum size, a fullscreen window), stderr gets `Warning: '<title>': size requested 400x300 but is 600x400`, the same message goes in `warnings`, and the exit code stays 0.
 

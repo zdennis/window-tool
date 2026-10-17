@@ -109,7 +109,8 @@ enum WindowToolError: LocalizedError {
     case optionRequired(option: String, command: String, placeholder: String)
     /// `command` is nil for `undo`, or names the command whose change `tile --untile` or `sidebar --unpush` looked for.
     case nothingToUndo(command: String?)
-    case fileNotFound(String)
+    /// `hint` says where to look next (for a named layout, the `layouts` command).
+    case fileNotFound(String, hint: String? = nil)
     /// `hint` replaces the default pointer to id= for commands where a window ID does not help.
     case appRequired(hint: String? = nil)
     case missingWindowSelector(command: String)
@@ -162,8 +163,8 @@ enum WindowToolError: LocalizedError {
             return "\(command) requires \(option) \(placeholder)"
         case .nothingToUndo(let command):
             return "Nothing to undo. " + (command.map { "Run '\($0)' first." } ?? "Commands that move or resize windows add to the undo history; it is cleared on restart.")
-        case .fileNotFound(let path):
-            return "File not found: \(path)"
+        case .fileNotFound(let path, let hint):
+            return "File not found: \(path)" + (hint.map { ". \($0)" } ?? "")
         case .appRequired(let hint):
             return "--app <name> is required for this command. " + (hint ?? "When selecting a window, id=<N> works without it; run 'window-tool list' to see window IDs.")
         case .missingWindowSelector(let command):
@@ -248,7 +249,7 @@ enum WindowToolError: LocalizedError {
             return ["command": command ?? NSNull()]
         case .missingWindowSelector(let command), .missingArguments(let command):
             return ["command": command]
-        case .fileNotFound(let path):
+        case .fileNotFound(let path, _):
             return ["path": path]
         case .timedOut(let what, let seconds):
             return ["waiting_for": what, "timeout": seconds]
@@ -672,6 +673,9 @@ var affectedWindows: [AffectedWindow] = []
 /// Warnings a command adds on its own (for example saved windows `restore-layout` could not match); reported with the frame warnings.
 var commandWarnings: [String] = []
 
+/// Fields a command adds to its `--json` result next to `windows` and `warnings` (restore-layout's `restored` and `total`).
+var commandResultFields: [String: Any] = [:]
+
 /// Records that the running command changed `window`. moveWindow/resizeWindow call it with what they requested;
 /// commands that change a window another way (focus, minimize, fullscreen) call it themselves.
 func recordAffectedWindow(_ window: AXUIElement, position: CGPoint? = nil, size: CGSize? = nil, failure: String? = nil, before: CGRect? = nil) {
@@ -739,7 +743,7 @@ func recordUndoEntry(_ args: [String]) {
 /// under `--json`) it prints the command's result: `{"windows": [...], "warnings": [...]}`, each window in the
 /// `info` schema after the change plus `requested` when a frame was asked for. Clears the recorded windows.
 func reportAffectedWindows(asJSON: Bool) {
-    defer { affectedWindows = []; commandWarnings = [] }
+    defer { affectedWindows = []; commandWarnings = []; commandResultFields = [:] }
     var warnings = commandWarnings
     var windows: [[String: Any]] = []
     for affected in affectedWindows {
@@ -762,7 +766,7 @@ func reportAffectedWindows(asJSON: Bool) {
         windows.append(window)
     }
     warnings.forEach { fputs("Warning: \($0)\n", stderr) }
-    if asJSON { printJSON(["windows": windows, "warnings": warnings] as [String: Any]) }
+    if asJSON { printJSON(commandResultFields.merging(["windows": windows, "warnings": warnings]) { $1 }) }
 }
 
 /// A changed window in the `info` schema with its owner's `bundle_id`, or nil once it no longer exists.
@@ -2815,7 +2819,37 @@ func pickCommand() {
 
 // MARK: - Layout Types
 
+/// Named layouts (`save-layout coding`) are saved here as `<name>.json`, under `$HOME` like other command-line tools' config.
+let layoutsDirectory = ((ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()) as NSString).appendingPathComponent(".config/window-tool/layouts")
+
+/// How long `restore-layout --launch` waits for the apps it opened to show their windows.
+let layoutLaunchTimeout: TimeInterval = 10
+
+/// A frame as fractions of a display's visible frame (0 to 1 from its top-left corner), so a layout survives a resolution change.
+struct FractionalFrame: Codable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    /// Rounded to 6 decimal places: readable in the file, and well under a point on any display.
+    init(_ rect: CGRect, in visible: CGRect) {
+        let round6 = { (v: CGFloat) in (Double(v) * 1e6).rounded() / 1e6 }
+        x = round6((rect.minX - visible.minX) / visible.width)
+        y = round6((rect.minY - visible.minY) / visible.height)
+        width = round6(rect.width / visible.width)
+        height = round6(rect.height / visible.height)
+    }
+
+    func rect(in visible: CGRect) -> CGRect {
+        CGRect(x: visible.minX + x * visible.width, y: visible.minY + y * visible.height,
+               width: width * visible.width, height: height * visible.height)
+    }
+}
+
 struct WindowSnapshot: Codable {
+    /// Absent in layouts saved before layouts covered every app; the layout's top-level `bundle_id` applies.
+    let bundleId: String?
     let index: Int
     /// Absent in layouts saved before window IDs were recorded, and for windows without one.
     let windowID: Int?
@@ -2824,15 +2858,22 @@ struct WindowSnapshot: Codable {
     let y: Int
     let width: Int
     let height: Int
+    /// The display holding the window's center (its `uuid` in `screens`) and the frame as fractions of that display's
+    /// visible frame. Absent in older layouts and for a window on no display; those restore to x, y, width, height.
+    let screenUUID: String?
+    let fraction: FractionalFrame?
 
     enum CodingKeys: String, CodingKey {
-        case index, title, x, y, width, height
+        case index, title, x, y, width, height, fraction
+        case bundleId = "bundle_id"
         case windowID = "window_id"
+        case screenUUID = "screen_uuid"
     }
 }
 
 struct WindowLayout: Codable {
-    let bundleId: String
+    /// Set when the layout was saved with --app, as every layout saved before layouts covered all apps was.
+    let bundleId: String?
     let windows: [WindowSnapshot]
 
     enum CodingKeys: String, CodingKey {
@@ -2841,73 +2882,281 @@ struct WindowLayout: Codable {
     }
 }
 
-/// Saves the current window layout for an application to a JSON file.
-func saveLayoutCommand(bundleId: String, filePath: String) throws {
-    let app = try requireApp(bundleId)
-    let windows = getWindows(appElement: app)
-    let snapshots = windows.map { w in
-        WindowSnapshot(index: w.id, windowID: w.windowID.map { Int($0) }, title: w.title,
-                       x: roundedInt(w.position.x), y: roundedInt(w.position.y),
-                       width: roundedInt(w.size.width), height: roundedInt(w.size.height))
-    }
-    let layout = WindowLayout(bundleId: bundleId, windows: snapshots)
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    let data = try encoder.encode(layout)
-    try data.write(to: URL(fileURLWithPath: filePath))
-    if config.jsonOutput, var saved = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-        saved["path"] = filePath
-        // Each window object carries its owner's bundle_id like every other JSON window; the file keeps it once at the top.
-        if let windows = saved["windows"] as? [[String: Any]] {
-            saved["windows"] = windows.map { window -> [String: Any] in
-                var window = window
-                window["bundle_id"] = bundleId
-                return window
-            }
-        }
-        printJSON(saved)
-    }
-    printStatus("Saved \(windows.count) window(s) to \(filePath)")
+/// True when a `save-layout`/`restore-layout` argument names a layout; one with a `/` or ending in `.json` is a file path.
+func isLayoutName(_ arg: String) -> Bool {
+    !arg.contains("/") && !arg.hasSuffix(".json")
 }
 
-/// Restores window positions and sizes from a previously saved layout file.
-/// Matches each saved window to a current one by window ID, then title, then index; a current window is used at
-/// most once. Saved windows with no match are skipped and reported as warnings.
-func restoreLayoutCommand(filePath: String) throws {
-    guard FileManager.default.fileExists(atPath: filePath) else {
-        throw WindowToolError.fileNotFound(filePath)
+/// The file for a layout argument: a name is `<layoutsDirectory>/<name>.json`, a path is used as given.
+func layoutPath(_ arg: String) throws -> String {
+    guard isLayoutName(arg) else { return arg }
+    guard !arg.isEmpty, !arg.hasPrefix("."), arg.allSatisfy({ $0.isLetter || $0.isNumber || "._-".contains($0) }) else {
+        throw WindowToolError.invalidValue(name: "layout name", expected: "letters, digits, '.', '_' and '-', not starting with '.' (or a file path containing '/' or ending in .json)", got: arg)
     }
-    let data = try Data(contentsOf: URL(fileURLWithPath: filePath))
-    let layout = try JSONDecoder().decode(WindowLayout.self, from: data)
-    let app = try requireApp(layout.bundleId)
-    let currentWindows = getWindows(appElement: app)
+    return (layoutsDirectory as NSString).appendingPathComponent(arg + ".json")
+}
+
+/// Saves the windows of every running app, or only of `bundleId`, as a named layout or to a file. Each window keeps its
+/// app, index, window ID, title and frame, plus its display's UUID and the frame as fractions of that display.
+/// Like `list`, untitled windows without a window ID are left out: nothing could match them again.
+func saveLayoutCommand(bundleId: String?, target: String) throws {
+    let filePath = try layoutPath(target)
+    let apps: [(bundleId: String, element: AXUIElement)]
+    if let bundleId {
+        apps = [(bundleId, try requireApp(bundleId))]
+    } else {
+        var seen = Set<String>()
+        apps = NSWorkspace.shared.runningApplications.compactMap { app -> (bundleId: String, element: AXUIElement)? in
+            guard app.activationPolicy == .regular, let id = app.bundleIdentifier, seen.insert(id).inserted else { return nil }
+            return (id, AXUIElementCreateApplication(app.processIdentifier))
+        }
+    }
+    let screens = NSScreen.screens
+    let frames = screens.map { cocoaToAX(rect: $0.frame) }
+    let visibleFrames = screens.map { cocoaToAX(rect: $0.visibleFrame) }
+    var snapshots: [WindowSnapshot] = []
+    for app in apps {
+        for w in getWindows(appElement: app.element) where !(w.title.isEmpty && w.windowID == nil) {
+            let rect = CGRect(origin: w.position, size: w.size)
+            var uuid: String?
+            var fraction: FractionalFrame?
+            if let screen = frames.firstIndex(where: { $0.contains(CGPoint(x: rect.midX, y: rect.midY)) }), let id = displayUUID(screens[screen]) {
+                uuid = id
+                fraction = FractionalFrame(rect, in: visibleFrames[screen])
+            }
+            snapshots.append(WindowSnapshot(bundleId: app.bundleId, index: w.id, windowID: w.windowID.map { Int($0) }, title: w.title,
+                                            x: roundedInt(rect.minX), y: roundedInt(rect.minY),
+                                            width: roundedInt(rect.width), height: roundedInt(rect.height),
+                                            screenUUID: uuid, fraction: fraction))
+        }
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let data = try encoder.encode(WindowLayout(bundleId: bundleId, windows: snapshots))
+    if isLayoutName(target) {
+        try FileManager.default.createDirectory(atPath: layoutsDirectory, withIntermediateDirectories: true)
+    }
+    try data.write(to: URL(fileURLWithPath: filePath), options: .atomic)
+    if config.jsonOutput, var saved = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        saved["path"] = filePath
+        printJSON(saved)
+    }
+    printStatus("Saved \(snapshots.count) window(s) to \(filePath)")
+}
+
+/// Pairs saved windows with an app's current ones by window ID, then title, then index; each current window is used at
+/// most once. Returns, for each position in `saved` that matched, the window and how it matched (`id`, `title` or `index`).
+func matchLayoutWindows(_ saved: [WindowSnapshot], to current: [WindowInfo]) -> [Int: (window: WindowInfo, by: String)] {
     // WindowInfo.id is the position in getWindows, unique here (it is -1 only for windows outside that list).
     var claimed = Set<Int>()
-    var matches: [Int: WindowInfo] = [:]
-    let strategies: [(WindowSnapshot, WindowInfo) -> Bool] = [
-        { saved, current in saved.windowID != nil && saved.windowID == current.windowID.map { Int($0) } },
-        { saved, current in saved.title == current.title },
+    var matches: [Int: (window: WindowInfo, by: String)] = [:]
+    let strategies: [(name: String, matches: (WindowSnapshot, WindowInfo) -> Bool)] = [
+        ("id", { saved, current in saved.windowID != nil && saved.windowID == current.windowID.map { Int($0) } }),
+        // Untitled windows would all match each other, so an empty title never matches.
+        ("title", { saved, current in !saved.title.isEmpty && saved.title == current.title }),
         // Last resort: whatever window now sits at the saved index, which may be an unrelated one.
-        { saved, current in saved.index == current.id },
+        ("index", { saved, current in saved.index == current.id }),
     ]
     for strategy in strategies {
-        for (position, saved) in layout.windows.enumerated() where matches[position] == nil {
-            if let match = currentWindows.first(where: { !claimed.contains($0.id) && strategy(saved, $0) }) {
+        for (position, window) in saved.enumerated() where matches[position] == nil {
+            if let match = current.first(where: { !claimed.contains($0.id) && strategy.matches(window, $0) }) {
                 claimed.insert(match.id)
-                matches[position] = match
+                matches[position] = (match, strategy.name)
             }
         }
     }
-    for (position, saved) in layout.windows.enumerated() {
-        guard let match = matches[position] else {
-            let id = saved.windowID.map { ", id=\($0)" } ?? ""
-            commandWarnings.append("no window matches saved '\(saved.title)' (index \(saved.index)\(id)); skipped")
+    return matches
+}
+
+/// Opens each app in `bundleIds` without waiting, then polls until every one is running with at least `windowCounts[id]`
+/// windows or `layoutLaunchTimeout` passes. Returns the apps running by then; each one that is missing or short of windows
+/// at the deadline, or not installed, gets a warning.
+func launchApps(_ bundleIds: [String], windowCounts: [String: Int]) -> [String: AXUIElement] {
+    var pending: [String] = []
+    for bundleId in bundleIds {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
+            commandWarnings.append("\(bundleId) is not installed; its windows were skipped")
             continue
         }
-        moveWindow(match.element, x: CGFloat(saved.x), y: CGFloat(saved.y))
-        resizeWindow(match.element, width: CGFloat(saved.width), height: CGFloat(saved.height))
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        pending.append(bundleId)
     }
-    printStatus("Restored \(matches.count)/\(layout.windows.count) window(s) for \(layout.bundleId)")
+    var opened: [String: AXUIElement] = [:]
+    let deadline = Date().addingTimeInterval(layoutLaunchTimeout)
+    while true {
+        for bundleId in pending where opened[bundleId] == nil {
+            opened[bundleId] = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first
+                .map { AXUIElementCreateApplication($0.processIdentifier) }
+        }
+        let waiting = pending.filter { bundleId in
+            opened[bundleId].map { getWindows(appElement: $0).count < windowCounts[bundleId, default: 0] } ?? true
+        }
+        if waiting.isEmpty { break }
+        if Date() >= deadline {
+            for bundleId in waiting {
+                if let app = opened[bundleId] {
+                    commandWarnings.append("\(bundleId) showed \(getWindows(appElement: app).count) of \(windowCounts[bundleId, default: 0]) saved window(s) within \(formatSeconds(layoutLaunchTimeout)); restoring the ones it has")
+                } else {
+                    commandWarnings.append("\(bundleId) did not open within \(formatSeconds(layoutLaunchTimeout)); its windows were skipped")
+                }
+            }
+            break
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+    }
+    return opened
+}
+
+/// One saved window in a restore: the window it matched (nil when it will not move) and the frame it goes to.
+struct LayoutPlanEntry {
+    let bundleId: String
+    let title: String
+    /// `id`, `title` or `index` for a matched window; `none` when nothing matched, `not_running` when the app is not
+    /// running, and `launch` when `--launch` would open the app (dry run only).
+    let match: String
+    let window: WindowInfo?
+    let frame: CGRect
+
+    var willMove: Bool { window != nil }
+
+    var json: [String: Any] {
+        ["bundle_id": bundleId, "title": title, "match": match, "will_move": willMove,
+         "window_id": window?.windowID.map { Int($0) as Any } ?? NSNull(),
+         "x": roundedInt(frame.minX), "y": roundedInt(frame.minY), "width": roundedInt(frame.width), "height": roundedInt(frame.height)]
+    }
+}
+
+/// Restores a layout (a name or a file from `save-layout`), matching each app's saved windows with `matchLayoutWindows`.
+/// A window saved with a display UUID goes to the same fractions of that display's visible frame, or of the primary
+/// display when that display is not connected; older layouts restore the absolute frame. Apps that are not running are
+/// skipped with a warning unless `launch` opens them, and when none of the layout's apps is running a real restore fails
+/// with `app_not_found`. Unmatched saved windows are skipped and reported as warnings; the `--json` result adds
+/// `restored` and `total`. `dryRun` prints the plan instead of moving anything (and does not launch apps).
+func restoreLayoutCommand(target: String, launch: Bool, dryRun: Bool) throws {
+    let filePath = try layoutPath(target)
+    guard FileManager.default.fileExists(atPath: filePath) else {
+        let hint = isLayoutName(target) ? "Run 'window-tool layouts' to list saved layouts."
+            : !target.contains("/") ? "To restore a saved layout by name, drop the extension: 'restore-layout \(target.dropLast(".json".count))'." : nil
+        throw WindowToolError.fileNotFound(filePath, hint: hint)
+    }
+    guard let data = FileManager.default.contents(atPath: filePath), let layout = try? JSONDecoder().decode(WindowLayout.self, from: data) else {
+        throw WindowToolError.operationFailed("\(filePath) is not a window-tool layout (save one with 'window-tool save-layout')")
+    }
+    // The saved windows grouped by app, apps in the order they first appear.
+    var appOrder: [String] = []
+    var savedByApp: [String: [WindowSnapshot]] = [:]
+    for saved in layout.windows {
+        guard let bundleId = saved.bundleId ?? layout.bundleId else {
+            throw WindowToolError.operationFailed("Layout \(filePath) has a window with no bundle_id: '\(saved.title)'")
+        }
+        if savedByApp[bundleId] == nil { appOrder.append(bundleId) }
+        savedByApp[bundleId, default: []].append(saved)
+    }
+    var apps: [String: AXUIElement] = [:]
+    for bundleId in appOrder { apps[bundleId] = getAppElement(bundleId: bundleId) }
+    let notRunning = appOrder.filter { apps[$0] == nil }
+    if !launch, !dryRun, !appOrder.isEmpty, notRunning.count == appOrder.count {
+        throw WindowToolError.appNotFound(notRunning.joined(separator: ", "))
+    }
+    if launch && !dryRun {
+        apps.merge(launchApps(notRunning, windowCounts: savedByApp.mapValues(\.count))) { $1 }
+    }
+
+    let screens = NSScreen.screens
+    let uuids = screens.map(displayUUID)
+    let visibleFrames = screens.map { cocoaToAX(rect: $0.visibleFrame) }
+    var missingDisplays = Set<String>()
+    func targetFrame(_ saved: WindowSnapshot) -> CGRect {
+        guard let uuid = saved.screenUUID, let fraction = saved.fraction else {
+            return CGRect(x: saved.x, y: saved.y, width: saved.width, height: saved.height)
+        }
+        if let screen = uuids.firstIndex(of: uuid) { return fraction.rect(in: visibleFrames[screen]) }
+        if missingDisplays.insert(uuid).inserted {
+            commandWarnings.append("display \(uuid) is not connected; its windows go to the primary display")
+        }
+        return fraction.rect(in: visibleFrames[0])
+    }
+
+    var plan: [LayoutPlanEntry] = []
+    for bundleId in appOrder {
+        let saved = savedByApp[bundleId, default: []]
+        guard let app = apps[bundleId] else {
+            if !launch {
+                commandWarnings.append("\(bundleId) is not running; skipped \(saved.count) window(s). Pass --launch to open it.")
+            }
+            // After a real --launch, an app still missing here failed to open and already has a warning.
+            plan += saved.map { LayoutPlanEntry(bundleId: bundleId, title: $0.title, match: launch && dryRun ? "launch" : "not_running", window: nil, frame: targetFrame($0)) }
+            continue
+        }
+        let matches = matchLayoutWindows(saved, to: getWindows(appElement: app))
+        for (position, window) in saved.enumerated() {
+            let match = matches[position]
+            if match == nil {
+                let id = window.windowID.map { ", id=\($0)" } ?? ""
+                commandWarnings.append("no \(bundleId) window matches saved '\(window.title)' (index \(window.index)\(id)); skipped")
+            }
+            plan.append(LayoutPlanEntry(bundleId: bundleId, title: window.title, match: match?.by ?? "none", window: match?.window, frame: targetFrame(window)))
+        }
+    }
+
+    if dryRun {
+        if config.jsonOutput {
+            printJSON(["plan": plan.map(\.json), "warnings": commandWarnings] as [String: Any])
+        } else {
+            print("APP\tMATCH\tWID\tPOSITION\tSIZE\tTITLE")
+            for entry in plan {
+                let wid = entry.window?.windowID.map { "\($0)" } ?? "-"
+                print("\(entry.bundleId)\t\(entry.match)\t\(wid)\t\(roundedInt(entry.frame.minX)),\(roundedInt(entry.frame.minY))\t\(roundedInt(entry.frame.width))x\(roundedInt(entry.frame.height))\t\(entry.title)")
+            }
+        }
+        return
+    }
+    for entry in plan {
+        guard let window = entry.window else { continue }
+        moveWindow(window.element, x: entry.frame.minX, y: entry.frame.minY)
+        resizeWindow(window.element, width: entry.frame.width, height: entry.frame.height)
+    }
+    let restored = plan.filter(\.willMove).count
+    if restored == 0 && !plan.isEmpty {
+        commandWarnings.append("no saved window was restored; run 'window-tool restore-layout \(target) --dry-run' to see how each one matched")
+    }
+    commandResultFields = ["restored": restored, "total": plan.count]
+    printStatus("Restored \(restored)/\(plan.count) window(s) for \(appOrder.count == 1 ? appOrder[0] : "\(appOrder.count) apps")")
+}
+
+/// Lists the named layouts in `layoutsDirectory` by name, ignoring case: window count, apps and when each was saved (the
+/// file's modification time). A file that is not a layout is skipped with a warning.
+func layoutsCommand() {
+    let files = ((try? FileManager.default.contentsOfDirectory(atPath: layoutsDirectory)) ?? [])
+        .filter { $0.hasSuffix(".json") }
+        .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    let entries = files.compactMap { file -> (name: String, path: String, windows: Int, apps: [String], saved: Date)? in
+        let path = (layoutsDirectory as NSString).appendingPathComponent(file)
+        guard let data = FileManager.default.contents(atPath: path), let layout = try? JSONDecoder().decode(WindowLayout.self, from: data) else {
+            commandWarnings.append("\(path) is not a window-tool layout; skipped")
+            return nil
+        }
+        var apps: [String] = []
+        for window in layout.windows {
+            if let id = window.bundleId ?? layout.bundleId, !apps.contains(id) { apps.append(id) }
+        }
+        let saved = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date ?? Date(timeIntervalSince1970: 0)
+        return (String(file.dropLast(".json".count)), path, layout.windows.count, apps, saved)
+    }
+    if config.jsonOutput {
+        let formatter = ISO8601DateFormatter()
+        printJSON(entries.map { ["name": $0.name, "path": $0.path, "windows": $0.windows, "apps": $0.apps, "saved": formatter.string(from: $0.saved)] as [String: Any] })
+    } else {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        print("NAME\tWINDOWS\tAPPS\tSAVED")
+        for entry in entries {
+            print("\(entry.name)\t\(entry.windows)\t\(entry.apps.joined(separator: ","))\t\(formatter.string(from: entry.saved))")
+        }
+        if entries.isEmpty {
+            fputs("No saved layouts. Save one with 'window-tool save-layout <name>'.\n", stderr)
+        }
+    }
 }
 
 /// Cascades all windows for an application, offsetting each by a fixed amount.
@@ -3195,7 +3444,8 @@ enum CommandGroup: String, CaseIterable {
     case meta = "Meta"
 }
 
-/// How a command uses --app. `optional` commands take a <window>, and `id=` selectors find the app themselves.
+/// How a command uses --app. `optional` commands work without it: those taking a <window> find the app from an `id=`
+/// selector, and `list` and `save-layout` cover every app.
 enum AppUsage {
     case required, optional, none
 }
@@ -3365,10 +3615,16 @@ let commandSpecs: [CommandSpec] = [
                         ("--full-width", "Fill the screen width"),
                         ("--push", "Push overlapping windows away from the sidebar"),
                         ("--unpush", "Undo the last sidebar: restore the sidebar window and any windows it pushed (takes no <window>)")]),
-    CommandSpec(name: "save-layout", group: .layout, app: .required, mutates: false, synopsis: "<file>",
-                summary: "Save the window layout for --app to a JSON file"),
-    CommandSpec(name: "restore-layout", group: .layout, app: .none, mutates: true, synopsis: "<file>",
-                summary: "Restore a window layout from a JSON file (the file names the app)"),
+    CommandSpec(name: "save-layout", group: .layout, app: .optional, mutates: false, synopsis: "<name-or-file>",
+                summary: "Save the windows of every app, or only of --app, as a named layout or to a JSON file",
+                arguments: [("<name-or-file>", "A layout name, saved in ~/.config/window-tool/layouts/, or a file path (containing '/' or ending in .json). Replaces an existing layout of the same name.")]),
+    CommandSpec(name: "restore-layout", group: .layout, app: .none, mutates: true, synopsis: "<name-or-file>",
+                summary: "Move windows back to a saved layout (the layout names the apps)",
+                arguments: [("<name-or-file>", "A layout name from 'layouts', or a file path (containing '/' or ending in .json)")],
+                flags: [("--launch", "Open the layout's apps that are not running, and wait up to 10s for their windows"),
+                        ("--dry-run", "Print where each window would go and how it was matched, without moving anything")]),
+    CommandSpec(name: "layouts", group: .layout, app: .none, mutates: false,
+                summary: "List the named layouts saved in ~/.config/window-tool/layouts/", needsAccessibility: false),
     CommandSpec(name: "undo", group: .layout, app: .none, mutates: true, synopsis: "[--steps N | --list]",
                 summary: "Revert the last command that moved or resized windows",
                 flags: [("--steps N", "Revert the last N changes, newest first, greater than 0 (default: 1)"),
@@ -3785,15 +4041,23 @@ func runCommand(_ args: [String]) throws {
         let selector = rest.isEmpty ? nil : try resolveSelectorAndArgs(rest, command: command).selector
         try restoreCommand(bundleId: config.bundleId, selector: selector)
     case "save-layout":
-        guard let filePath = try checkArgs(rest, command: command, max: 1).first else {
+        guard let target = try checkArgs(rest, command: command, max: 1).first else {
             throw WindowToolError.missingArguments(command: "save-layout")
         }
-        try saveLayoutCommand(bundleId: config.bundleId, filePath: filePath)
+        // An empty config.bundleId means no --app was given: save every app.
+        try saveLayoutCommand(bundleId: config.bundleId.isEmpty ? nil : config.bundleId, target: target)
     case "restore-layout":
-        guard let filePath = try checkArgs(rest, command: command, max: 1).first else {
+        let launch = takeFlag("--launch", from: &rest)
+        let dryRun = takeFlag("--dry-run", from: &rest)
+        guard let target = try checkArgs(rest, command: command, max: 1).first else {
             throw WindowToolError.missingArguments(command: "restore-layout")
         }
-        try restoreLayoutCommand(filePath: filePath)
+        try restoreLayoutCommand(target: target, launch: launch, dryRun: dryRun)
+        // A dry run moves nothing; its plan is its result, so no windows result follows it.
+        config.printedOwnResult = dryRun
+    case "layouts":
+        try checkArgs(rest, command: command)
+        layoutsCommand()
     case "undo":
         // undo is a mutating command, but --list changes nothing and prints the history as its result,
         // so it sets printedOwnResult to stop the main loop from printing an empty windows result after it.
@@ -3955,6 +4219,7 @@ for (index, group) in commandGroups.enumerated() {
         commandWarnings.forEach { fputs("Warning: \($0)\n", stderr) }
         affectedWindows = []
         commandWarnings = []
+        commandResultFields = [:]
         var error = error
         if case WindowToolError.optionNeedsValue(let option, nil) = error {
             error = WindowToolError.optionNeedsValue(option, command: group[0])
