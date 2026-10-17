@@ -2419,12 +2419,9 @@ func untileCommand() throws {
     printStatus("Restored \(restored) window(s)")
 }
 
-/// Prints the number of windows for the given application. Prints "0" if the app is not found.
-func countCommand(bundleId: String) {
-    guard let app = getAppElement(bundleId: bundleId) else {
-        if config.jsonOutput { printJSON(["count": 0]) } else { print("0") }
-        return  // count returns 0 for unknown apps rather than erroring
-    }
+/// Prints the number of windows for the given application. Throws if `--app` is missing or the app is not found.
+func countCommand(bundleId: String) throws {
+    let app = try requireApp(bundleId)
     let windows = getWindows(appElement: app)
     if config.jsonOutput { printJSON(["count": windows.count]) } else { print("\(windows.count)") }
 }
@@ -2641,7 +2638,7 @@ func runCommand(_ args: [String]) throws {
         let size = try parseSizeFlag(rest)
         try centerCommand(bundleId: config.bundleId, selector: selector, size: size)
     case "count":
-        countCommand(bundleId: config.bundleId)
+        try countCommand(bundleId: config.bundleId)
     case "move":
         let (selector, rest) = try resolveSelectorAndArgs(args, minArgs: 3)
         guard rest.count >= 2 else {
