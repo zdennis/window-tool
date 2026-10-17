@@ -581,6 +581,11 @@ func resolveAllWindows(bundleId: String, selector: WindowSelector) throws -> [Wi
 
 // MARK: - Screen Helpers
 
+/// Converts a Cocoa (bottom-left origin) rect to AX global coordinates (top-left origin at the primary display).
+func cocoaToAX(rect: NSRect) -> NSRect {
+    NSRect(x: rect.origin.x, y: NSScreen.screens[0].frame.height - rect.maxY, width: rect.width, height: rect.height)
+}
+
 /// Prints info for all connected displays.
 /// Output columns: index, frame origin, frame size, visible origin, visible size, and flags ([main], [mouse]).
 func screensCommand() {
@@ -1291,10 +1296,8 @@ func screenBoundsForWindow(_ window: WindowInfo) -> (x: CGFloat, y: CGFloat, wid
     let mainHeight = NSScreen.screens[0].frame.height
     let flippedCenter = NSPoint(x: windowCenter.x, y: mainHeight - windowCenter.y)
     let screen = NSScreen.screens.first { $0.frame.contains(flippedCenter) } ?? NSScreen.main ?? NSScreen.screens[0]
-    let frame = screen.frame
-    let visible = screen.visibleFrame
-    let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
-    return (x: visible.origin.x, y: topLeftY, width: visible.width, height: visible.height)
+    let visible = cocoaToAX(rect: screen.visibleFrame)
+    return (x: visible.origin.x, y: visible.origin.y, width: visible.width, height: visible.height)
 }
 
 enum SnapPosition: String, CaseIterable {
@@ -1540,10 +1543,8 @@ func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex
         throw WindowToolError.screenIndexOutOfRange(index: screenIndex, count: screens.count)
     }
     let targetScreen = screens[screenIndex]
-    let frame = targetScreen.frame
-    let visible = targetScreen.visibleFrame
-    let topLeftY = frame.origin.y + frame.height - (visible.origin.y + visible.height)
-    moveWindow(window.element, x: visible.origin.x, y: topLeftY)
+    let visible = cocoaToAX(rect: targetScreen.visibleFrame)
+    moveWindow(window.element, x: visible.origin.x, y: visible.origin.y)
 }
 
 /// Minimizes a window.
