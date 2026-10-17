@@ -13,7 +13,7 @@ window-tool --app <name-or-id> list
 
 Without `--app`, lists all windows across all running applications, sorted by app name. With `--app`, lists only windows for that application.
 
-Text output columns (tab-separated): APP, BUNDLE_ID, INDEX, WID, POSITION, SIZE, TITLE. With `--json`, outputs a JSON array with keys: app, bundle_id, index, window_id, x, y, width, height, title.
+Text output columns (tab-separated): APP, BUNDLE_ID, INDEX, WID, POSITION, SIZE, TITLE. With `--json`, outputs a JSON array of windows in the `info` schema (bundle_id, index or parent_index, window_id, title, x, y, width, height, minimized, fullscreen, focused, main, modal, role, subrole, document) plus `app`, `pid`, `screen`, `on_screen` and `layer`. `screen` is the index of the display (as in `screens`) containing the window's center, left out when the window is off every display. `on_screen` is false for minimized windows and windows on other Spaces. `layer` is the window level (0 for normal windows). `window_id`, `pid`, `screen`, `on_screen` and `layer` are left out when unknown, so use `// empty` or `.field? // null` in `jq`. The text output is unchanged and has no state columns; use `--json` to filter on them.
 
 ## Examples
 
@@ -25,4 +25,5 @@ window-tool list
 
 window-tool --app iTerm list
 window-tool --json list
+window-tool --json list | jq '.[] | select(.minimized | not) | .window_id'
 ```

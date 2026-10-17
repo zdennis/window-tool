@@ -1056,28 +1056,18 @@ func listCommand(bundleId: String?) throws {
     struct WindowEntry {
         let app: String
         let bundleId: String
-        let index: Int
-        let windowID: CGWindowID?
-        let x: Int
-        let y: Int
-        let width: Int
-        let height: Int
-        let title: String
+        let pid: pid_t?
+        let window: WindowInfo
     }
 
     var entries: [WindowEntry] = []
 
     if let bundleId = bundleId {
         let appElement = try requireApp(bundleId)
-        let appName = NSWorkspace.shared.runningApplications
-            .first { $0.bundleIdentifier == bundleId }?.localizedName ?? bundleId
-        let windows = getWindows(appElement: appElement)
-        for w in windows {
-            entries.append(WindowEntry(app: appName, bundleId: bundleId, index: w.id,
-                                       windowID: w.windowID,
-                                       x: roundedInt(w.position.x), y: roundedInt(w.position.y),
-                                       width: roundedInt(w.size.width), height: roundedInt(w.size.height),
-                                       title: w.title))
+        let running = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
+        let appName = running?.localizedName ?? bundleId
+        for w in getWindows(appElement: appElement) {
+            entries.append(WindowEntry(app: appName, bundleId: bundleId, pid: running?.processIdentifier, window: w))
         }
     } else {
         let apps = NSWorkspace.shared.runningApplications
@@ -1091,11 +1081,7 @@ func listCommand(bundleId: String?) throws {
                 seen.insert(bid)
                 let appName = app.localizedName ?? "Unknown"
                 for w in windows {
-                    entries.append(WindowEntry(app: appName, bundleId: bid, index: w.id,
-                                               windowID: w.windowID,
-                                               x: roundedInt(w.position.x), y: roundedInt(w.position.y),
-                                               width: roundedInt(w.size.width), height: roundedInt(w.size.height),
-                                               title: w.title))
+                    entries.append(WindowEntry(app: appName, bundleId: bid, pid: app.processIdentifier, window: w))
                 }
             }
         }
@@ -1103,23 +1089,32 @@ func listCommand(bundleId: String?) throws {
     }
 
     if config.jsonOutput {
-        let items = entries.map { e in
-            var dict: [String: Any] = [
-                "app": e.app, "bundle_id": e.bundleId,
-                "index": e.index,
-                "x": e.x, "y": e.y,
-                "width": e.width, "height": e.height,
-                "title": e.title
-            ]
-            if let wid = e.windowID { dict["window_id"] = Int(wid) }
+        let cgWindows = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[CFString: Any]]) ?? []
+        var cgByID: [CGWindowID: [CFString: Any]] = [:]
+        for entry in cgWindows {
+            if let number = entry[kCGWindowNumber] as? CGWindowID { cgByID[number] = entry }
+        }
+        let screenFrames = NSScreen.screens.map { cocoaToAX(rect: $0.frame) }
+        let items = entries.map { e -> [String: Any] in
+            let w = e.window
+            var dict = windowInfoJSON(w, bundleId: e.bundleId)
+            dict["app"] = e.app
+            if let pid = e.pid { dict["pid"] = Int(pid) }
+            let center = CGPoint(x: w.position.x + w.size.width / 2, y: w.position.y + w.size.height / 2)
+            if let screen = screenFrames.firstIndex(where: { $0.contains(center) }) { dict["screen"] = screen }
+            if let wid = w.windowID, let cg = cgByID[wid] {
+                dict["on_screen"] = cg[kCGWindowIsOnscreen] as? Bool ?? false
+                if let layer = cg[kCGWindowLayer] as? Int { dict["layer"] = layer }
+            }
             return dict
         }
         printJSON(items)
     } else {
         print("APP\tBUNDLE ID\tINDEX\tWID\tPOSITION\tSIZE\tTITLE")
         for e in entries {
-            let wid = e.windowID.map { String($0) } ?? "?"
-            print("\(e.app)\t\(e.bundleId)\t\(e.index)\t\(wid)\t\(e.x),\(e.y)\t\(e.width)x\(e.height)\t\(e.title)")
+            let w = e.window
+            let wid = w.windowID.map { String($0) } ?? "?"
+            print("\(e.app)\t\(e.bundleId)\t\(w.id)\t\(wid)\t\(roundedInt(w.position.x)),\(roundedInt(w.position.y))\t\(roundedInt(w.size.width))x\(roundedInt(w.size.height))\t\(w.title)")
         }
     }
 }
