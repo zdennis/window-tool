@@ -92,7 +92,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `undim` | [README](docs/README.undim.md) | Remove active dim overlay |
 | `unfullscreen` | [README](docs/README.unfullscreen.md) | Exit macOS fullscreen mode |
 | `wait` | [README](docs/README.wait.md) | Block until a window exists or is gone; exit 7 on timeout |
-| `watch` | [README](docs/README.watch.md) | Watch for window changes |
+| `watch` | [README](docs/README.watch.md) | Watch for window changes (`--ndjson`: one event per line) |
 
 ### Options
 

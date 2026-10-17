@@ -2850,8 +2850,11 @@ func stackCommand(bundleId: String, selectors: [WindowSelector]?, offsetStep: In
     printStatus("Stacked \(windows.count) window(s)")
 }
 
-/// Watches for window changes and prints updates.
-func watchCommand(bundleId: String, interval: Double) throws {
+/// Watches for window changes and prints updates. With `ndjson`, prints one compact event object per line
+/// (`added`, `removed`, `moved`, `retitled`, keyed by window ID) and nothing for the starting state. `once` stops
+/// after the first poll that changed something; `timeout` stops the watch after that long (exit 7 if `once`
+/// saw nothing by then).
+func watchCommand(bundleId: String, interval: Double, ndjson: Bool = false, once: Bool = false, timeout: Double? = nil) throws {
     let app = try requireApp(bundleId)
 
     struct WindowState: Equatable {
@@ -2888,23 +2891,77 @@ func watchCommand(bundleId: String, interval: Double) throws {
         }
     }
 
-    if !config.jsonOutput {
+    func emit(_ event: String, _ w: WindowState, index: Int, before: WindowState? = nil) {
+        var dict: [String: Any] = ["event": event, "bundle_id": bundleId, "window_id": w.windowID ?? 0, "index": index,
+                                   "x": w.x, "y": w.y, "width": w.width, "height": w.height, "title": w.title]
+        if event == "retitled", let before { dict["previous_title"] = before.title }
+        if event == "moved", let before {
+            dict["previous"] = ["x": before.x, "y": before.y, "width": before.width, "height": before.height]
+        }
+        if config.jsonChaining {
+            printJSON(dict)
+        } else if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+                  let line = String(data: data, encoding: .utf8) {
+            print(line)
+        }
+    }
+
+    /// Events between two snapshots, matched by window ID; windows without an ID are not tracked.
+    func emitEvents(from old: [WindowState], to new: [WindowState]) -> Int {
+        var count = 0
+        var oldByID: [Int: WindowState] = [:]
+        for w in old { if let id = w.windowID { oldByID[id] = w } }
+        var seen = Set<Int>()
+        for (i, w) in new.enumerated() {
+            guard let id = w.windowID else { continue }
+            seen.insert(id)
+            guard let before = oldByID[id] else { emit("added", w, index: i); count += 1; continue }
+            if (before.x, before.y, before.width, before.height) != (w.x, w.y, w.width, w.height) {
+                emit("moved", w, index: i, before: before); count += 1
+            }
+            if before.title != w.title { emit("retitled", w, index: i, before: before); count += 1 }
+        }
+        for (i, w) in old.enumerated() {
+            if let id = w.windowID, !seen.contains(id) { emit("removed", w, index: i); count += 1 }
+        }
+        return count
+    }
+
+    if !config.jsonOutput && !ndjson {
         print("INDEX\tPOSITION\tSIZE\tTITLE")
     }
     var previous = snapshot()
-    printState(previous)
-    fflush(stdout)
+    if !ndjson {
+        printState(previous)
+        fflush(stdout)
+    }
 
     signal(SIGINT) { _ in flushJSONAndExit(0) }
 
+    let deadline = timeout.map { Date().addingTimeInterval($0) }
     while true {
-        Thread.sleep(forTimeInterval: interval)
+        var pause = interval
+        if let deadline {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 {
+                if once, let timeout { throw WindowToolError.timedOut(what: "a window change in \(bundleId)", seconds: timeout) }
+                return
+            }
+            pause = min(pause, remaining)
+        }
+        Thread.sleep(forTimeInterval: pause)
         let current = snapshot()
         if current != previous {
-            if !config.jsonOutput { print("---") }
-            printState(current)
+            var changed = true
+            if ndjson {
+                changed = emitEvents(from: previous, to: current) > 0
+            } else {
+                if !config.jsonOutput { print("---") }
+                printState(current)
+            }
             fflush(stdout)
             previous = current
+            if once && changed { return }
         }
     }
 }
@@ -3139,10 +3196,13 @@ let commandSpecs: [CommandSpec] = [
                 summary: "List all displays with bounds and scale in window coordinates", needsAccessibility: false),
     CommandSpec(name: "pick", group: .query, app: .none, mutates: false,
                 summary: "Click a window to print its ID (blocks until you click)", needsAccessibility: false),
-    CommandSpec(name: "watch", group: .query, app: .required, mutates: false, synopsis: "[--interval <seconds>]",
-                summary: "Print window changes for --app until interrupted",
+    CommandSpec(name: "watch", group: .query, app: .required, mutates: false, synopsis: "[--interval <seconds>] [--ndjson] [--once] [--timeout <seconds>]",
+                summary: "Print window changes for --app until interrupted, --once or --timeout",
                 arguments: [("[interval]", "Legacy form of --interval")],
-                flags: [("--interval <seconds>", "Poll interval, greater than 0 (default: 1.0)")]),
+                flags: [("--interval <seconds>", "Poll interval, greater than 0 (default: 1.0)"),
+                        ("--ndjson", "Print one JSON event per line (added, removed, moved, retitled) instead of full snapshots"),
+                        ("--once", "Stop after the first change (exit 7 if --timeout passes first)"),
+                        ("--timeout <seconds>", "Stop watching after this long, greater than 0 (exit 0, or 7 with --once and no change)")]),
 
     CommandSpec(name: "wait", group: .query, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Block until a window exists, or with --gone is gone; exit 7 on timeout",
@@ -3642,9 +3702,12 @@ func runCommand(_ args: [String]) throws {
         try waitCommand(selector: try resolveSelectorAndArgs(rest, command: command).selector, gone: gone, stable: stable, timeout: timeout)
     case "watch":
         let namedInterval = try takeOption("--interval", from: &rest)
+        let ndjson = takeFlag("--ndjson", from: &rest)
+        let once = takeFlag("--once", from: &rest)
+        let watchTimeout = try takeOption("--timeout", from: &rest).map { try parsePositiveDouble($0, label: "timeout") }
         let positionalInterval = try checkArgs(rest, command: command, max: namedInterval == nil ? 1 : 0).first
         let interval = try (namedInterval ?? positionalInterval).map { try parsePositiveDouble($0, label: "interval") } ?? 1.0
-        try watchCommand(bundleId: config.bundleId, interval: interval)
+        try watchCommand(bundleId: config.bundleId, interval: interval, ndjson: ndjson, once: once, timeout: watchTimeout)
     case "focus":
         try focusCommand(bundleId: config.bundleId, selector: try resolveSelectorAndArgs(rest, command: command).selector)
     case "fullscreen":
