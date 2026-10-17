@@ -10,7 +10,7 @@ window-tool undim
 
 ## Details
 
-Terminates the running dim overlay process. Errors if no dim overlay is active.
+Terminates the running dim overlay process. Does nothing and exits 0 if no dim overlay is active.
 
 ## Examples
 

@@ -70,7 +70,11 @@ enum WindowToolError: LocalizedError {
     case noWindowMatchingID(CGWindowID)
     case screenIndexOutOfRange(index: Int, count: Int)
     case accessibilityNotEnabled
-    case invalidArgument(value: String, label: String)
+    case invalidValue(name: String, expected: String, got: String)
+    case unknownChoice(kind: String, value: String, choices: String)
+    case optionRequired(option: String, command: String, placeholder: String)
+    case nothingToUndo(command: String)
+    case fileNotFound(String)
     case appRequired
     case missingWindowSelector(command: String)
     case unknownOption(String, command: String)
@@ -99,10 +103,18 @@ enum WindowToolError: LocalizedError {
             return "Screen index \(index) out of range (0..\(count - 1))"
         case .accessibilityNotEnabled:
             return "Accessibility access is not enabled.\nGrant access in System Settings > Privacy & Security > Accessibility.\nAdd this terminal app or the window-tool binary."
-        case .invalidArgument(let value, let label):
-            return "'\(value)' is not a valid \(label)"
+        case .invalidValue(let name, let expected, let got):
+            return "\(name) must be \(expected), got '\(got)'"
+        case .unknownChoice(let kind, let value, let choices):
+            return "Unknown \(kind) '\(value)'. Choose one of: \(choices)"
+        case .optionRequired(let option, let command, let placeholder):
+            return "\(command) requires \(option) \(placeholder)"
+        case .nothingToUndo(let command):
+            return "Nothing to undo. Run '\(command)' first."
+        case .fileNotFound(let path):
+            return "File not found: \(path)"
         case .appRequired:
-            return "--app is required for this command"
+            return "--app <name> is required for this command. When selecting a window, id=<N> works without it; run 'window-tool list' to see window IDs."
         case .missingWindowSelector(let command):
             return "Missing window selector for '\(command)'. Use an index (0, 1, ...), id=<N>, or title=<pattern>.\nRun 'window-tool \(command) --help' for usage."
         case .unknownOption(let option, let command):
@@ -131,28 +143,28 @@ enum WindowToolError: LocalizedError {
 
 func parseInt(_ s: String, label: String) throws -> Int {
     guard let v = Int(s) else {
-        throw WindowToolError.invalidArgument(value: s, label: label)
+        throw WindowToolError.invalidValue(name: label, expected: "a whole number", got: s)
     }
     return v
 }
 
 func parseDouble(_ s: String, label: String) throws -> Double {
     guard let v = Double(s) else {
-        throw WindowToolError.invalidArgument(value: s, label: label)
+        throw WindowToolError.invalidValue(name: label, expected: "a number", got: s)
     }
     return v
 }
 
 func parsePositiveInt(_ s: String, label: String) throws -> Int {
     guard let v = Int(s), v > 0 else {
-        throw WindowToolError.invalidArgument(value: s, label: "\(label) (must be greater than 0)")
+        throw WindowToolError.invalidValue(name: label, expected: "a whole number greater than 0", got: s)
     }
     return v
 }
 
 func parsePositiveDouble(_ s: String, label: String) throws -> Double {
     guard let v = Double(s), v.isFinite, v > 0 else {
-        throw WindowToolError.invalidArgument(value: s, label: "\(label) (must be greater than 0)")
+        throw WindowToolError.invalidValue(name: label, expected: "a number greater than 0", got: s)
     }
     return v
 }
@@ -227,7 +239,7 @@ func parseColor(_ name: String) throws -> NSColor {
         let colors: [NSColor] = [.red, .green, .blue, .yellow, .orange, .purple, .white, .cyan, .magenta]
         return colors[Int.random(in: 0..<colors.count)]
     default:
-        throw WindowToolError.invalidArgument(value: name, label: "color (valid: \(validColors.joined(separator: ", ")))")
+        throw WindowToolError.unknownChoice(kind: "color", value: name, choices: validColors.joined(separator: ", "))
     }
 }
 
@@ -460,14 +472,14 @@ func parseNamedSelector(_ arg: String) throws -> WindowSelector? {
     if arg.hasPrefix("id=") {
         let idStr = String(arg.dropFirst(3))
         guard let id = UInt32(idStr) else {
-            throw WindowToolError.invalidArgument(value: arg, label: "window ID")
+            throw WindowToolError.invalidValue(name: "id=<N>", expected: "a non-negative whole number", got: idStr)
         }
         return .byWindowID(CGWindowID(id))
     }
     if arg.hasPrefix("title=") {
         let pattern = String(arg.dropFirst(6))
         guard !pattern.isEmpty else {
-            throw WindowToolError.invalidArgument(value: arg, label: "title pattern")
+            throw WindowToolError.operationFailed("title= needs a pattern, e.g. title=Inbox")
         }
         return .byTitle(pattern)
     }
@@ -769,7 +781,7 @@ func shellInitCommand(shell: String) throws {
         print("  set -gx WINDOWID (\(binary) active-window --id 2>/dev/null)")
         print("end")
     default:
-        throw WindowToolError.invalidArgument(value: shell, label: "shell (zsh, bash, fish)")
+        throw WindowToolError.unknownChoice(kind: "shell", value: shell, choices: "zsh, bash, fish")
     }
 }
 
@@ -1095,6 +1107,7 @@ class DimOverlayView: NSView {
 }
 
 func killExistingDim() {
+    // Nothing dimmed means the desired end state already holds, so this is a quiet success.
     guard let pid = readPID(at: dimPIDFile) else { return }
     terminateOverlay(pid: pid)
     try? FileManager.default.removeItem(atPath: dimPIDFile)
@@ -1102,7 +1115,7 @@ func killExistingDim() {
 
 func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, duration: Double) throws {
     guard opacity >= 0.0 && opacity <= 1.0 else {
-        throw WindowToolError.invalidArgument(value: "\(opacity)", label: "opacity (must be between 0.0 and 1.0)")
+        throw WindowToolError.invalidValue(name: "opacity", expected: "between 0.0 and 1.0", got: "\(opacity)")
     }
 
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
@@ -1177,13 +1190,12 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
 }
 
 func undimCommand() throws {
-    guard let pid = readPID(at: dimPIDFile) else {
-        throw WindowToolError.invalidArgument(value: "none", label: "active dim overlay (run 'dim' first)")
-    }
+    // Nothing dimmed means the desired end state already holds, so this is a quiet success.
+    guard let pid = readPID(at: dimPIDFile) else { return }
     let terminated = terminateOverlay(pid: pid)
     try? FileManager.default.removeItem(atPath: dimPIDFile)
     if !terminated {
-        throw WindowToolError.invalidArgument(value: "\(pid)", label: "dim process (not running, or not a window-tool process)")
+        throw WindowToolError.operationFailed("Dim process \(pid) is not running or is not a window-tool process")
     }
 }
 
@@ -1472,7 +1484,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
         sidebarX = bounds.x
         sidebarY = bounds.y + bounds.height - h
     default:
-        throw WindowToolError.invalidArgument(value: side, label: "side (left, right, top, bottom)")
+        throw WindowToolError.unknownChoice(kind: "side", value: side, choices: "left, right, top, bottom")
     }
     moveWindow(window.element, x: sidebarX, y: sidebarY)
     if fullHeight || fullWidth {
@@ -1564,7 +1576,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
 /// Restores windows to their pre-sidebar positions from the snapshot file.
 func sidebarUnpushCommand() throws {
     guard FileManager.default.fileExists(atPath: sidebarSnapshotFile) else {
-        throw WindowToolError.operationFailed("No sidebar snapshot found at \(sidebarSnapshotFile)")
+        throw WindowToolError.nothingToUndo(command: "sidebar")
     }
     let data = try Data(contentsOf: URL(fileURLWithPath: sidebarSnapshotFile))
     let snapshots = try JSONDecoder().decode([SidebarWindowSnapshot].self, from: data)
@@ -1735,7 +1747,7 @@ func previewCommand(bundleId: String, selector: WindowSelector, outputPath: Stri
 
 func parseRecordFlags(_ args: inout [String]) throws -> (output: String, fps: Int, duration: Double?, countdown: Bool, border: Bool) {
     guard let output = try takeOption("--output", from: &args) else {
-        throw WindowToolError.invalidArgument(value: "--output", label: "flag (required, specify an output file path)")
+        throw WindowToolError.optionRequired(option: "--output", command: "record", placeholder: "<path>")
     }
     let fps = try takeOption("--fps", from: &args).map { try parsePositiveInt($0, label: "fps") } ?? 30
     let duration = try takeOption("--duration", from: &args).map { try parseDouble($0, label: "duration") }
@@ -2258,6 +2270,9 @@ func saveLayoutCommand(bundleId: String, filePath: String) throws {
 /// Restores window positions and sizes from a previously saved layout file.
 /// Matches windows by title. Windows that can't be matched are skipped.
 func restoreLayoutCommand(filePath: String) throws {
+    guard FileManager.default.fileExists(atPath: filePath) else {
+        throw WindowToolError.fileNotFound(filePath)
+    }
     let data = try Data(contentsOf: URL(fileURLWithPath: filePath))
     let layout = try JSONDecoder().decode(WindowLayout.self, from: data)
     let app = try requireApp(layout.bundleId)
@@ -2439,7 +2454,7 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
 /// Restores windows to their pre-tile positions from the snapshot file.
 func untileCommand() throws {
     guard FileManager.default.fileExists(atPath: tileSnapshotFile) else {
-        throw WindowToolError.operationFailed("No tile snapshot found at \(tileSnapshotFile)")
+        throw WindowToolError.nothingToUndo(command: "tile")
     }
     let data = try Data(contentsOf: URL(fileURLWithPath: tileSnapshotFile))
     let snapshots = try JSONDecoder().decode([TileWindowSnapshot].self, from: data)
@@ -2907,7 +2922,7 @@ func runCommand(_ args: [String]) throws {
             throw WindowToolError.missingArguments(command: "snap")
         }
         guard let position = SnapPosition(rawValue: posStr) else {
-            throw WindowToolError.invalidArgument(value: posStr, label: "position (valid: \(SnapPosition.allNames))")
+            throw WindowToolError.unknownChoice(kind: "position", value: posStr, choices: SnapPosition.allNames)
         }
         try snapCommand(bundleId: config.bundleId, selector: selector, position: position)
     case "sidebar":
