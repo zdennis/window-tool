@@ -19,7 +19,7 @@ Without `--json`, prints the version, then one `granted` or `missing` line per p
 |-----|-------------|
 | `version` | The `window-tool` version |
 | `accessibility` | True when Accessibility is granted |
-| `screenRecording` | True when Screen Recording is granted |
+| `screen_recording` | True when Screen Recording is granted |
 
 `window-tool --json --version` prints just `{"version": ...}`.
 

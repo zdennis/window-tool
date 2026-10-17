@@ -23,7 +23,7 @@ Prints the current window state, then polls for changes at the given interval. W
 
 `--interval` is the canonical form. A bare number (`watch 0.5`) is still accepted as the interval, but not together with `--interval`.
 
-Runs until interrupted with Ctrl-C, or until `--once` or `--timeout` ends it. `--once` and `--timeout` work in every mode; without `--ndjson`, `--once` stops after the first changed snapshot is printed.
+Runs until interrupted with Ctrl-C, or until `--once` or `--timeout` ends it. `--once` and `--timeout` work in every mode; without `--ndjson`, `--once` stops after the first changed snapshot is printed. With `--json --once`, the starting snapshot is not printed, so the command prints exactly one JSON document: the changed snapshot (exit 0), or the `timeout` error object (exit 7).
 
 ### `--ndjson`
 

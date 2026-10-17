@@ -170,7 +170,7 @@ $ window-tool --json --app Finder info 99
 | 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 | 6 | `close` was blocked by an unsaved-changes prompt | `unsaved_changes` |
-| 7 | `wait` timed out | `timeout` |
+| 7 | `wait`, or `watch --once` with `--timeout`, timed out | `timeout` |
 
 New error codes may be added; match on the exit code for the category and on `code` for the specific case.
 

@@ -109,7 +109,8 @@ enum WindowToolError: LocalizedError {
     case appRequired(hint: String? = nil)
     case missingWindowSelector(command: String)
     case unknownOption(String, command: String)
-    case repeatedOption(String, command: String)
+    /// `command` is nil for a repeated global flag (--json, --first, --keep-going), which belongs to no command.
+    case repeatedOption(String, command: String?)
     case unexpectedArgument(String, command: String)
     /// `command` is nil when thrown by takeOption; the top-level catch fills it in.
     case optionNeedsValue(String, command: String?)
@@ -165,7 +166,7 @@ enum WindowToolError: LocalizedError {
         case .unknownOption(let option, let command):
             return "Unknown option '\(option)' for '\(command)'. Run 'window-tool \(command) --help'."
         case .repeatedOption(let option, let command):
-            return "Option '\(option)' given more than once for '\(command)'. Run 'window-tool \(command) --help'."
+            return "Option '\(option)' given more than once" + (command.map { " for '\($0)'. Run 'window-tool \($0) --help'." } ?? ". Give it once. Run 'window-tool help'.")
         case .unexpectedArgument(let arg, let command):
             return "Unexpected argument '\(arg)' for '\(command)'. Run 'window-tool \(command) --help'."
         case .optionNeedsValue(let option, let command):
@@ -246,8 +247,10 @@ enum WindowToolError: LocalizedError {
             return ["waiting_for": what, "timeout": seconds]
         case .unsavedChanges(let windows):
             return ["windows": windows.map { ["window_id": $0.windowID.map { Int($0) } ?? NSNull(), "title": $0.title] as [String: Any] }]
-        case .unknownOption(let option, let command), .repeatedOption(let option, let command), .optionTakesNoValue(let option, let command):
+        case .unknownOption(let option, let command), .optionTakesNoValue(let option, let command):
             return ["option": option, "command": command]
+        case .repeatedOption(let option, let command):
+            return ["option": option, "command": command ?? NSNull()]
         case .unexpectedArgument(let argument, let command):
             return ["argument": argument, "command": command]
         case .optionNeedsValue(let option, let command):
@@ -259,7 +262,7 @@ enum WindowToolError: LocalizedError {
         }
     }
 
-    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 6 unsaved changes blocked a close, 7 a wait timed out, 1 anything else.
+    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 6 unsaved changes blocked a close, 7 a wait or watch --once timed out, 1 anything else.
     var exitCode: Int32 {
         switch self {
         case .invalidValue, .unknownChoice, .optionRequired, .appRequired, .missingWindowSelector, .unknownOption,
@@ -315,9 +318,12 @@ func parseInt(_ s: String, label: String) throws -> Int {
     return v
 }
 
+/// Largest magnitude accepted for a coordinate or size; far beyond any display, and safe to round to Int.
+let maxCoordinate = 1e12
+
 func parseDouble(_ s: String, label: String) throws -> Double {
-    guard let v = Double(s) else {
-        throw WindowToolError.invalidValue(name: label, expected: "a number", got: s)
+    guard let v = Double(s), v.isFinite, abs(v) <= maxCoordinate else {
+        throw WindowToolError.invalidValue(name: label, expected: "a finite number no larger than 1e12 in magnitude", got: s)
     }
     return v
 }
@@ -541,7 +547,7 @@ func getCGWindowID(_ element: AXUIElement) -> CGWindowID? {
 }
 
 /// Rounds an AX position or size to the nearest integer (AX reports fractional values on Retina displays). Capture pixel sizes in preview/record deliberately keep truncating.
-func roundedInt(_ v: CGFloat) -> Int { Int(v.rounded()) }
+func roundedInt(_ v: CGFloat) -> Int { v.isNaN ? 0 : Int(max(-maxCoordinate, min(maxCoordinate, Double(v))).rounded()) }
 
 @_silgen_name("_AXUIElementGetWindow")
 func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
@@ -2978,7 +2984,7 @@ func watchCommand(bundleId: String, interval: Double, ndjson: Bool = false, once
         print("INDEX\tPOSITION\tSIZE\tTITLE")
     }
     var previous = snapshot()
-    if !ndjson {
+    if !ndjson && !(once && config.jsonOutput) {
         printState(previous)
         fflush(stdout)
     }
@@ -3393,7 +3399,7 @@ func doctorCommand() {
     let accessibility = AXIsProcessTrusted()
     let screenRecording = CGPreflightScreenCaptureAccess()
     if config.jsonOutput {
-        printJSON(["version": VERSION, "accessibility": accessibility, "screenRecording": screenRecording] as [String: Any])
+        printJSON(["version": VERSION, "accessibility": accessibility, "screen_recording": screenRecording] as [String: Any])
     } else {
         func row(_ name: String, _ granted: Bool, _ needed: String) -> String {
             "\(name.padding(toLength: 17, withPad: " ", startingAt: 0))\(granted ? "granted" : "missing")  (\(needed))"
@@ -3482,7 +3488,7 @@ func usage() {
       to stdout (in a chain, the failed command's "error"). Exit codes: 0 success,
       1 other failure, 2 usage error, 3 app not found or ambiguous, 4 window not
       found, 5 permission not granted (Accessibility, or Screen Recording for record),
-      6 close blocked by an unsaved-changes prompt, 7 wait timed out.
+      6 close blocked by an unsaved-changes prompt, 7 wait or watch --once timed out.
 
     Warnings:
       After a move or resize, the window's frame is re-read. If a set call failed or
@@ -3519,19 +3525,19 @@ func usage() {
 
 var args = Array(CommandLine.arguments.dropFirst())
 
-// Parse --json flag
-if let jsonIdx = args.firstIndex(of: "--json") {
-    config.jsonOutput = true
-    args.remove(at: jsonIdx)
+// Parse the global flags --json, --first and --keep-going. Each may appear once; a repeat is a usage error like a repeated command option.
+// --json is read first so the error is reported as JSON when the repeat is of --json itself.
+func takeGlobalFlag(_ name: String) -> Bool {
+    let given = takeFlag(name, from: &args)
+    if given, args.contains(name) {
+        if name == "--json" { config.jsonOutput = true }
+        exitWithError(WindowToolError.repeatedOption(name, command: nil))
+    }
+    return given
 }
-if let firstIdx = args.firstIndex(of: "--first") {
-    config.firstMatch = true
-    args.remove(at: firstIdx)
-}
-if let keepGoingIdx = args.firstIndex(of: "--keep-going") {
-    config.keepGoing = true
-    args.remove(at: keepGoingIdx)
-}
+if takeGlobalFlag("--json") { config.jsonOutput = true }
+if takeGlobalFlag("--first") { config.firstMatch = true }
+if takeGlobalFlag("--keep-going") { config.keepGoing = true }
 
 // Parse --app flag
 // A missing value (takeOption throws) and an empty one get the same error.
