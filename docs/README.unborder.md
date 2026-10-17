@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] unborder [<window>]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | No | Window selector: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | No | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). |
 
 ## Details
 

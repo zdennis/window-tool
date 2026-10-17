@@ -13,7 +13,7 @@ window-tool sidebar --unpush
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes (except with `--unpush`) | Window selector (index, `id=N`, or `title=pattern`) |
+| `<window>` | Yes (except with `--unpush`) | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). |
 
 ## Options
 

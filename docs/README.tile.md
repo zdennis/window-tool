@@ -13,7 +13,7 @@ window-tool tile --untile
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>...` | No | Window selectors to tile. If omitted, tiles all windows for the app |
+| `<window>...` | No | Window selectors to tile: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). If omitted, tiles all windows for the app |
 
 ## Options
 

@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] columnize <window> <window> [<window>...] [--ga
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes (2+) | Window selectors to arrange: index, `id=<N>`, or `title=<pattern>` |
+| `<window>` | Yes (2+) | Window selectors to arrange: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). |
 
 ## Options
 

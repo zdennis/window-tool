@@ -12,7 +12,7 @@ window-tool [--app <name-or-id>] center <window> [--size N | --size W,H]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<window>` | Yes | Window selector (index, `id=N`, or `title=pattern`) |
+| `<window>` | Yes | Window selector: index, `id=<N>`, or `title=<pattern>` (case-insensitive; fails when several windows match unless `--first` is given). |
 
 ## Options
 
