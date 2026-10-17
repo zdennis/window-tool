@@ -21,7 +21,7 @@ window-tool tile --untile
 |--------|-------------|
 | `--gap N` | Gap between windows in pixels (default: 10) |
 | `--cols N` | Force a specific number of columns (must be greater than 0) |
-| `--untile` | Restore windows to their pre-tile positions |
+| `--untile` | Undo the last `tile`: restore the windows it moved (no `--app` needed) |
 
 ## Details
 
@@ -38,7 +38,7 @@ The grid layout is calculated automatically based on window count:
 
 Use `--cols N` to override the automatic column count.
 
-Before tiling, all window positions and sizes are snapshotted to `window-tool-tile-snapshot.json` in your per-user temporary directory (`$TMPDIR`). Use `--untile` to restore windows to their original layout.
+Tiling saves the windows' previous frames in the undo history, like every command that moves windows. `--untile` reverts the newest `tile` entry, even when other changes came after it, and `undo` reverts the newest change of any kind; see [undo](README.undo.md). With no `tile` in the history, `--untile` fails with `Nothing to undo. Run 'tile' first.` (exit 1).
 
 All windows are tiled onto the screen containing the first window in the list.
 
@@ -60,7 +60,7 @@ window-tool --app iTerm tile --gap 20
 window-tool --app iTerm tile --cols 2
 
 # Restore windows to pre-tile positions
-window-tool --app iTerm tile --untile
+window-tool tile --untile
 
 # Tile by window IDs
 window-tool --app iTerm tile id=1341 id=1342 id=1343

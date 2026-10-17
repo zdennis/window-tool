@@ -22,6 +22,10 @@ struct Config {
     var chainFailedAt: Int?
     var runningCommand: String?
     var commandOutput: [Any] = []
+    /// Set by a mutating command that printed its own JSON result (`undo --list`), so no `{"windows", "warnings"}` result follows it.
+    var printedOwnResult = false
+    /// Set by `undo` (and its aliases) so the frames it restores are not saved as a new change; `recordUndoEntry` clears it.
+    var skipUndoRecording = false
 }
 
 var config = Config()
@@ -103,7 +107,8 @@ enum WindowToolError: LocalizedError {
     case invalidValue(name: String, expected: String, got: String)
     case unknownChoice(kind: String, value: String, choices: [String])
     case optionRequired(option: String, command: String, placeholder: String)
-    case nothingToUndo(command: String)
+    /// `command` is nil for `undo`, or names the command whose change `tile --untile` or `sidebar --unpush` looked for.
+    case nothingToUndo(command: String?)
     case fileNotFound(String)
     /// `hint` replaces the default pointer to id= for commands where a window ID does not help.
     case appRequired(hint: String? = nil)
@@ -156,7 +161,7 @@ enum WindowToolError: LocalizedError {
         case .optionRequired(let option, let command, let placeholder):
             return "\(command) requires \(option) \(placeholder)"
         case .nothingToUndo(let command):
-            return "Nothing to undo. Run '\(command)' first."
+            return "Nothing to undo. " + (command.map { "Run '\($0)' first." } ?? "Commands that move or resize windows add to the undo history; it is cleared on restart.")
         case .fileNotFound(let path):
             return "File not found: \(path)"
         case .appRequired(let hint):
@@ -239,7 +244,9 @@ enum WindowToolError: LocalizedError {
             return ["kind": kind, "value": value, "choices": choices]
         case .optionRequired(let option, let command, _):
             return ["option": option, "command": command]
-        case .nothingToUndo(let command), .missingWindowSelector(let command), .missingArguments(let command):
+        case .nothingToUndo(let command):
+            return ["command": command ?? NSNull()]
+        case .missingWindowSelector(let command), .missingArguments(let command):
             return ["command": command]
         case .fileNotFound(let path):
             return ["path": path]
@@ -467,30 +474,54 @@ func parseTileFlags(_ args: inout [String]) throws -> (gap: Int, cols: Int?, unt
     return (gap, cols, untile)
 }
 
-// MARK: - Sidebar Snapshot
+// MARK: - Undo History
 
-let sidebarSnapshotFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-sidebar-snapshot.json")
+/// Per-user (in `$TMPDIR`, so it is gone after a restart); holds the last `undoHistoryLimit` geometry changes, oldest first.
+let undoHistoryFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-undo-history.json")
+let undoHistoryLimit = 20
 
-struct SidebarWindowSnapshot: Codable {
-    let bundleId: String
+/// A window's frame before a command moved or resized it.
+struct UndoWindowFrame: Codable {
+    let bundleId: String?
     let windowID: UInt32
+    let title: String
     let x: Int
     let y: Int
     let width: Int
     let height: Int
+
+    enum CodingKeys: String, CodingKey {
+        case title, x, y, width, height
+        case bundleId = "bundle_id"
+        case windowID = "window_id"
+    }
 }
 
-// MARK: - Tile Snapshot
+/// One command's geometry change: the command line and the frames it replaced.
+struct UndoEntry: Codable {
+    let command: String
+    let arguments: [String]
+    let time: Date
+    let windows: [UndoWindowFrame]
+}
 
-let tileSnapshotFile = (NSTemporaryDirectory() as NSString).appendingPathComponent("window-tool-tile-snapshot.json")
+/// The undo history, oldest first; empty when there is none, or (with a warning) when the file cannot be decoded.
+func loadUndoHistory() -> [UndoEntry] {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: undoHistoryFile)) else { return [] }
+    guard let history = try? decoder.decode([UndoEntry].self, from: data) else {
+        fputs("Warning: could not read the undo history at \(undoHistoryFile); treating it as empty, and the next change replaces it\n", stderr)
+        return []
+    }
+    return history
+}
 
-struct TileWindowSnapshot: Codable {
-    let bundleId: String
-    let windowID: UInt32
-    let x: Int
-    let y: Int
-    let width: Int
-    let height: Int
+func saveUndoHistory(_ history: [UndoEntry]) throws {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(Array(history.suffix(undoHistoryLimit))).write(to: URL(fileURLWithPath: undoHistoryFile), options: .atomic)
 }
 
 // MARK: - Accessibility Helpers
@@ -632,6 +663,8 @@ struct AffectedWindow {
     var position: CGPoint?
     var size: CGSize?
     var failures: [String] = []
+    /// The frame before the command's first move or resize, saved for `undo` by `recordUndoEntry`.
+    var before: CGRect?
 }
 
 var affectedWindows: [AffectedWindow] = []
@@ -641,30 +674,64 @@ var commandWarnings: [String] = []
 
 /// Records that the running command changed `window`. moveWindow/resizeWindow call it with what they requested;
 /// commands that change a window another way (focus, minimize, fullscreen) call it themselves.
-func recordAffectedWindow(_ window: AXUIElement, position: CGPoint? = nil, size: CGSize? = nil, failure: String? = nil) {
+func recordAffectedWindow(_ window: AXUIElement, position: CGPoint? = nil, size: CGSize? = nil, failure: String? = nil, before: CGRect? = nil) {
     let index = affectedWindows.firstIndex { CFEqual($0.element, window) } ?? {
         affectedWindows.append(AffectedWindow(element: window))
         return affectedWindows.count - 1
     }()
     affectedWindows[index].position = position ?? affectedWindows[index].position
     affectedWindows[index].size = size ?? affectedWindows[index].size
+    affectedWindows[index].before = affectedWindows[index].before ?? before
     if let failure { affectedWindows[index].failures.append(failure) }
 }
 
+/// The window's frame before the running command first changes it, or nil once it has been recorded.
+func frameBeforeFirstChange(_ window: AXUIElement) -> CGRect? {
+    affectedWindows.contains { CFEqual($0.element, window) } ? nil : currentFrame(of: window)
+}
+
 /// Moves a window to the specified screen coordinates.
+/// It also captures the window's previous frame for `undo`, so every geometry change must go through moveWindow or resizeWindow.
 func moveWindow(_ window: AXUIElement, x: CGFloat, y: CGFloat) {
     var point = CGPoint(x: x, y: y)
     guard let value = AXValueCreate(.cgPoint, &point) else { return }
+    let before = frameBeforeFirstChange(window)
     let result = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value)
-    recordAffectedWindow(window, position: point, failure: result == .success ? nil : "could not set position (AXError \(result.rawValue))")
+    recordAffectedWindow(window, position: point, failure: result == .success ? nil : "could not set position (AXError \(result.rawValue))", before: before)
 }
 
-/// Resizes a window to the specified width and height.
+/// Resizes a window to the specified width and height. Like moveWindow, it captures the previous frame for `undo`.
 func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
     var size = CGSize(width: width, height: height)
     guard let value = AXValueCreate(.cgSize, &size) else { return }
+    let before = frameBeforeFirstChange(window)
     let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
-    recordAffectedWindow(window, size: size, failure: result == .success ? nil : "could not set size (AXError \(result.rawValue))")
+    recordAffectedWindow(window, size: size, failure: result == .success ? nil : "could not set size (AXError \(result.rawValue))", before: before)
+}
+
+/// Runs after each command, before `reportAffectedWindows`. Appends the frames the command replaced to the undo
+/// history: every window it moved or resized that has a window ID and ended up somewhere else (so `shake`, which
+/// returns the window to where it was, adds nothing). A history that cannot be written becomes a warning.
+func recordUndoEntry(_ args: [String]) {
+    defer { config.skipUndoRecording = false }
+    guard !config.skipUndoRecording else { return }
+    let frames: [UndoWindowFrame] = affectedWindows.compactMap { affected in
+        guard let before = affected.before, let windowID = getCGWindowID(affected.element),
+              let after = currentFrame(of: affected.element) else { return nil }
+        let rounded = { (r: CGRect) in [r.origin.x, r.origin.y, r.width, r.height].map(roundedInt) }
+        guard rounded(before) != rounded(after) else { return nil }
+        var pid: pid_t = 0
+        let bundleId = AXUIElementGetPid(affected.element, &pid) == .success ? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier : nil
+        return UndoWindowFrame(bundleId: bundleId, windowID: windowID, title: axString(affected.element, kAXTitleAttribute as String) ?? "",
+                               x: roundedInt(before.origin.x), y: roundedInt(before.origin.y),
+                               width: roundedInt(before.width), height: roundedInt(before.height))
+    }
+    guard !frames.isEmpty else { return }
+    do {
+        try saveUndoHistory(loadUndoHistory() + [UndoEntry(command: args[0], arguments: Array(args.dropFirst()), time: Date(), windows: frames)])
+    } catch {
+        commandWarnings.append("could not save the undo history to \(undoHistoryFile): \(error.localizedDescription)")
+    }
 }
 
 /// Runs after each command. Re-reads every window it changed and prints `Warning: ...` to stderr for each set
@@ -1911,7 +1978,6 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
         let sidebarRect = CGRect(x: sidebarX, y: sidebarY, width: w, height: h)
         let sidebarWindowID = window.windowID
 
-        var snapshots: [SidebarWindowSnapshot] = []
         let apps = NSWorkspace.shared.runningApplications
         var seen = Set<String>()
         for app in apps {
@@ -1925,22 +1991,13 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
                 if let wid = win.windowID, let sid = sidebarWindowID, wid == sid { continue }
                 // Skip windows with zero size (minimized, etc.)
                 if win.size.width <= 0 || win.size.height <= 0 { continue }
-                guard let wid = win.windowID else { continue }
+                // Undo finds windows by ID, so a window without one is left where it is
+                guard win.windowID != nil else { continue }
 
                 // Check if window center is on the same screen
                 let winBounds = screenBoundsForWindow(win)
                 guard winBounds.x == bounds.x && winBounds.y == bounds.y &&
                       winBounds.width == bounds.width && winBounds.height == bounds.height else { continue }
-
-                // Snapshot the window's current position
-                snapshots.append(SidebarWindowSnapshot(
-                    bundleId: bid,
-                    windowID: wid,
-                    x: roundedInt(win.position.x),
-                    y: roundedInt(win.position.y),
-                    width: roundedInt(win.size.width),
-                    height: roundedInt(win.size.height)
-                ))
 
                 // Check overlap with sidebar
                 let winRect = CGRect(x: win.position.x, y: win.position.y,
@@ -1979,37 +2036,7 @@ func sidebarCommand(bundleId: String, selector: WindowSelector, side: String, fu
                 }
             }
         }
-
-        // Save snapshot
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(snapshots)
-        try data.write(to: URL(fileURLWithPath: sidebarSnapshotFile), options: .atomic)
     }
-}
-
-/// Restores windows to their pre-sidebar positions from the snapshot file.
-func sidebarUnpushCommand() throws {
-    guard FileManager.default.fileExists(atPath: sidebarSnapshotFile) else {
-        throw WindowToolError.nothingToUndo(command: "sidebar")
-    }
-    let data = try Data(contentsOf: URL(fileURLWithPath: sidebarSnapshotFile))
-    let snapshots = try JSONDecoder().decode([SidebarWindowSnapshot].self, from: data)
-
-    var restored = 0
-    for snap in snapshots {
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == snap.bundleId }
-        guard let app = apps.first else { continue }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        let windows = getWindows(appElement: appElement)
-        guard let win = windows.first(where: { $0.windowID == snap.windowID }) else { continue }
-        moveWindow(win.element, x: CGFloat(snap.x), y: CGFloat(snap.y))
-        resizeWindow(win.element, width: CGFloat(snap.width), height: CGFloat(snap.height))
-        restored += 1
-    }
-
-    try FileManager.default.removeItem(atPath: sidebarSnapshotFile)
-    printStatus("Restored \(restored) window(s)")
 }
 
 /// Enters macOS fullscreen mode for a window.
@@ -3075,25 +3102,6 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
     }
 
     let bounds = screenBoundsForWindow(windows[0])
-
-    // Snapshot all windows before moving
-    var snapshots: [TileWindowSnapshot] = []
-    for win in windows {
-        guard let wid = win.windowID else { continue }
-        snapshots.append(TileWindowSnapshot(
-            bundleId: bundleId,
-            windowID: wid,
-            x: roundedInt(win.position.x),
-            y: roundedInt(win.position.y),
-            width: roundedInt(win.size.width),
-            height: roundedInt(win.size.height)
-        ))
-    }
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    let data = try encoder.encode(snapshots)
-    try data.write(to: URL(fileURLWithPath: tileSnapshotFile), options: .atomic)
-
     let (rows, cols) = calculateGrid(windowCount: windows.count, colsOverride: colsOverride)
     let cellWidth = (bounds.width - CGFloat(gap) * CGFloat(cols - 1)) / CGFloat(cols)
     let cellHeight = (bounds.height - CGFloat(gap) * CGFloat(rows - 1)) / CGFloat(rows)
@@ -3109,28 +3117,64 @@ func tileCommand(bundleId: String, selectors: [WindowSelector]?, gap: Int, colsO
     printStatus("Tiled \(windows.count) window(s) in \(rows)x\(cols) grid")
 }
 
-/// Restores windows to their pre-tile positions from the snapshot file.
-func untileCommand() throws {
-    guard FileManager.default.fileExists(atPath: tileSnapshotFile) else {
-        throw WindowToolError.nothingToUndo(command: "tile")
-    }
-    let data = try Data(contentsOf: URL(fileURLWithPath: tileSnapshotFile))
-    let snapshots = try JSONDecoder().decode([TileWindowSnapshot].self, from: data)
+/// The text of an undo history entry's command line, such as `snap 0 left`.
+func undoEntryLine(_ entry: UndoEntry) -> String {
+    ([entry.command] + entry.arguments).joined(separator: " ")
+}
 
-    var restored = 0
-    for snap in snapshots {
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == snap.bundleId }
-        guard let app = apps.first else { continue }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        let windows = getWindows(appElement: appElement)
-        guard let win = windows.first(where: { $0.windowID == snap.windowID }) else { continue }
-        moveWindow(win.element, x: CGFloat(snap.x), y: CGFloat(snap.y))
-        resizeWindow(win.element, width: CGFloat(snap.width), height: CGFloat(snap.height))
-        restored += 1
+/// Reverts the newest `steps` entries of the undo history, newest first, or with `command` only the newest entry that
+/// command made (`tile --untile`, `sidebar --unpush`), and removes them from the history. A window that no longer
+/// exists is skipped with a warning.
+func undoCommand(steps: Int = 1, command: String? = nil) throws {
+    config.skipUndoRecording = true
+    var history = loadUndoHistory()
+    let positions: [Int]
+    if let command {
+        guard let last = history.lastIndex(where: { $0.command == command }) else { throw WindowToolError.nothingToUndo(command: command) }
+        positions = [last]
+    } else {
+        guard !history.isEmpty else { throw WindowToolError.nothingToUndo(command: nil) }
+        guard steps <= history.count else {
+            throw WindowToolError.invalidValue(name: "--steps", expected: "at most \(history.count), the number of changes in the undo history", got: "\(steps)")
+        }
+        positions = Array(history.indices.suffix(steps).reversed())
     }
+    for position in positions {
+        let entry = history[position]
+        var restored = 0
+        for frame in entry.windows {
+            guard let window = findWindowByID(frame.windowID) else {
+                commandWarnings.append("'\(frame.title)' (id=\(frame.windowID)) no longer exists; not restored")
+                continue
+            }
+            moveWindow(window.element, x: CGFloat(frame.x), y: CGFloat(frame.y))
+            resizeWindow(window.element, width: CGFloat(frame.width), height: CGFloat(frame.height))
+            restored += 1
+        }
+        printStatus("Undid '\(undoEntryLine(entry))': restored \(restored) window(s)")
+    }
+    for position in positions.sorted(by: >) { history.remove(at: position) }
+    try saveUndoHistory(history)
+}
 
-    try FileManager.default.removeItem(atPath: tileSnapshotFile)
-    printStatus("Restored \(restored) window(s)")
+/// Prints the undo history, newest first; step N is what `undo --steps=N` reverts down to.
+func undoListCommand() {
+    let entries = Array(loadUndoHistory().reversed())
+    if config.jsonOutput {
+        let formatter = ISO8601DateFormatter()
+        printJSON(["entries": entries.enumerated().map { step, entry in
+            ["step": step + 1, "command": entry.command, "arguments": entry.arguments, "time": formatter.string(from: entry.time),
+             "windows": entry.windows.map { ["bundle_id": $0.bundleId ?? NSNull(), "window_id": Int($0.windowID), "title": $0.title,
+                                             "x": $0.x, "y": $0.y, "width": $0.width, "height": $0.height] as [String: Any] }] as [String: Any]
+        }])
+    } else {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        print("STEP\tTIME\tWINDOWS\tCOMMAND")
+        for (step, entry) in entries.enumerated() {
+            print("\(step + 1)\t\(formatter.string(from: entry.time))\t\(entry.windows.count)\t\(undoEntryLine(entry))")
+        }
+    }
 }
 
 /// Prints the number of windows for the given application. Throws if `--app` is missing or the app is not found.
@@ -3305,7 +3349,7 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Tile windows in a grid (all windows for --app when none are given)",
                 flags: [("--gap N", "Gap between windows in pixels (default: 10)"),
                         ("--cols N", "Force a number of columns, greater than 0"),
-                        ("--untile", "Restore windows to their pre-tile positions (no --app needed)")]),
+                        ("--untile", "Undo the last tile: restore the windows it moved (no --app needed)")]),
     CommandSpec(name: "columnize", group: .layout, app: .optional, mutates: true, synopsis: "<window> <window> [<window>...]",
                 summary: "Arrange windows side by side in columns",
                 flags: [("--gap N", "Gap between columns in pixels (default: 10)")]),
@@ -3320,11 +3364,15 @@ let commandSpecs: [CommandSpec] = [
                         ("--full-height", "Fill the screen height"),
                         ("--full-width", "Fill the screen width"),
                         ("--push", "Push overlapping windows away from the sidebar"),
-                        ("--unpush", "Restore windows moved by --push (takes no <window>)")]),
+                        ("--unpush", "Undo the last sidebar: restore the sidebar window and any windows it pushed (takes no <window>)")]),
     CommandSpec(name: "save-layout", group: .layout, app: .required, mutates: false, synopsis: "<file>",
                 summary: "Save the window layout for --app to a JSON file"),
     CommandSpec(name: "restore-layout", group: .layout, app: .none, mutates: true, synopsis: "<file>",
                 summary: "Restore a window layout from a JSON file (the file names the app)"),
+    CommandSpec(name: "undo", group: .layout, app: .none, mutates: true, synopsis: "[--steps N | --list]",
+                summary: "Revert the last command that moved or resized windows",
+                flags: [("--steps N", "Revert the last N changes, newest first, greater than 0 (default: 1)"),
+                        ("--list", "Show the undo history, newest first, without changing anything")]),
 
     CommandSpec(name: "highlight", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
                 summary: "Briefly highlight a window (blocks until it dismisses)",
@@ -3496,6 +3544,11 @@ func usage() {
       fullscreen window), stderr gets "Warning: '<title>': size requested WxH but is WxH" and the exit
       code stays 0. With --json the message is also in the result's "warnings".
 
+    Undo:
+      Commands that move or resize windows save the frames they replace (the last 20
+      changes, per user, cleared on restart). 'undo' reverts the newest, 'undo --list'
+      shows them. focus, minimize, restore, fullscreen and close are not recorded.
+
     Command chaining:
       Use + to run multiple commands in sequence, sharing --app and --json flags.
       Subsequent commands inherit the window selector from the previous command.
@@ -3647,7 +3700,7 @@ func runCommand(_ args: [String]) throws {
         let tileFlags = try parseTileFlags(&rest)
         if tileFlags.untile {
             try checkArgs(rest, command: command)
-            try untileCommand()
+            try undoCommand(command: "tile")
         } else {
             try rejectUnknownOptions(rest, command: command)
             let selectors: [WindowSelector]? = rest.isEmpty ? nil : try rest.map { try parseWindowSelector($0) }
@@ -3701,7 +3754,7 @@ func runCommand(_ args: [String]) throws {
         let (side, fullHeight, fullWidth, push) = try parseSidebarFlags(&rest)
         if takeFlag("--unpush", from: &rest) {
             try checkArgs(rest, command: command)
-            try sidebarUnpushCommand()
+            try undoCommand(command: "sidebar")
         } else {
             let selector = try resolveSelectorAndArgs(rest, command: command).selector
             try sidebarCommand(bundleId: config.bundleId, selector: selector, side: side, fullHeight: fullHeight, fullWidth: fullWidth, push: push)
@@ -3741,6 +3794,19 @@ func runCommand(_ args: [String]) throws {
             throw WindowToolError.missingArguments(command: "restore-layout")
         }
         try restoreLayoutCommand(filePath: filePath)
+    case "undo":
+        // undo is a mutating command, but --list changes nothing and prints the history as its result,
+        // so it sets printedOwnResult to stop the main loop from printing an empty windows result after it.
+        let steps = try takeOption("--steps", from: &rest)
+        let list = takeFlag("--list", from: &rest)
+        try checkArgs(rest, command: command)
+        if list {
+            if let steps { throw WindowToolError.invalidValue(name: "--steps", expected: "left out when --list is given", got: steps) }
+            undoListCommand()
+            config.printedOwnResult = true
+        } else {
+            try undoCommand(steps: try steps.map { try parsePositiveInt($0, label: "--steps") } ?? 1)
+        }
     case "stack":
         var offset = try takeOption("--offset", from: &rest).map { try parseInt($0, label: "offset") }
         try rejectUnknownOptions(rest, command: command)
@@ -3878,9 +3944,15 @@ for (index, group) in commandGroups.enumerated() {
     config.runningCommand = group[0]
     do {
         try runCommand(group)
-        reportAffectedWindows(asJSON: config.jsonOutput && commandSpec(named: group[0])?.mutates == true)
+        recordUndoEntry(group)
+        reportAffectedWindows(asJSON: config.jsonOutput && commandSpec(named: group[0])?.mutates == true && !config.printedOwnResult)
+        config.printedOwnResult = false
         recordChainResult()
     } catch {
+        // Windows a failed command already moved can still be undone. reportAffectedWindows does not run here,
+        // so a warning from saving the history is printed directly.
+        recordUndoEntry(group)
+        commandWarnings.forEach { fputs("Warning: \($0)\n", stderr) }
         affectedWindows = []
         commandWarnings = []
         var error = error

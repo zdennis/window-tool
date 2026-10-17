@@ -26,7 +26,7 @@ window-tool sidebar --unpush
 | `--full-height` | Maximize the window height to fill the visible screen area |
 | `--full-width` | Maximize the window width to fill the visible screen area |
 | `--push` | Push all overlapping windows on the same screen away from the sidebar |
-| `--unpush` | Restore all windows to their pre-push positions and sizes |
+| `--unpush` | Undo the last `sidebar`: restore the sidebar window and any windows it pushed |
 
 `--side=right` and the other `--flag=value` spellings work too.
 
@@ -41,13 +41,11 @@ When `--push` is used, after placing the sidebar window, all other windows on th
 - **Left/right sidebars** push windows horizontally
 - **Top/bottom sidebars** push windows vertically
 
-If pushing a window would move it partially off-screen, its width or height is reduced to keep it on-screen. All window positions and sizes are snapshotted before any pushing occurs.
+If pushing a window would move it partially off-screen, its width or height is reduced to keep it on-screen. Windows without a window ID are not pushed, because `--unpush` could not find them again.
 
 ### Unpush behavior
 
-`--unpush` reads the snapshot saved by `--push` (`window-tool-sidebar-snapshot.json` in your per-user temporary directory, `$TMPDIR`) and restores every window to its original position and size. The snapshot is then deleted. If no snapshot exists, an error message is printed and the command exits with code 1.
-
-The snapshot covers windows from all applications, not just the `--app` target.
+Every `sidebar` saves the previous frames of the windows it moved, the sidebar window and pushed windows from any app, in the undo history. `--unpush` reverts the newest `sidebar` entry, even when other changes came after it, and puts the sidebar window back too; `undo` reverts the newest change of any kind. See [undo](README.undo.md). With no `sidebar` in the history, `--unpush` fails with `Nothing to undo. Run 'sidebar' first.` (exit 1).
 
 With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
 
@@ -72,7 +70,7 @@ window-tool --app Notes sidebar 0 --side=left --full-height
 # Pin as sidebar and push other windows out of the way
 window-tool --app Notes sidebar 0 --side=left --full-height --push
 
-# Restore all windows to their pre-push positions
+# Undo the sidebar, putting pushed windows back
 window-tool sidebar --unpush
 
 # Pin by window ID
