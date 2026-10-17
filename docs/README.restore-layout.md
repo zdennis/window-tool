@@ -20,6 +20,8 @@ Reads a layout file and matches windows by title. Windows that can't be matched 
 
 Prints how many windows were restored out of the total saved.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

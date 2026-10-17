@@ -18,6 +18,8 @@ window-tool [--app <name-or-id>] unfullscreen <window>
 
 Exits native macOS fullscreen mode, returning the window to its previous size and position.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

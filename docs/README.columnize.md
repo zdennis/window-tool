@@ -24,6 +24,8 @@ window-tool [--app <name-or-id>] columnize <window> <window> [<window>...] [--ga
 
 Arranges the specified windows in equal-width columns across the visible screen area. Windows are placed in the order given, left to right. The application is activated and all arranged windows are raised to the front.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

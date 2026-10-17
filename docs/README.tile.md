@@ -42,6 +42,8 @@ Before tiling, all window positions and sizes are snapshotted to `window-tool-ti
 
 All windows are tiled onto the screen containing the first window in the list.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

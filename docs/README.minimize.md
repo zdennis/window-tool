@@ -18,6 +18,8 @@ window-tool [--app <name-or-id>] minimize <window>
 
 Minimizes the window to the dock. Use `restore` to unminimize all minimized windows.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

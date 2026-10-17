@@ -93,7 +93,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | Option | Description |
 |--------|-------------|
 | `--app <name-or-id>` | Target application by name or bundle ID; an exact app name (case-insensitive) wins over substring matches |
-| `--json` | Output in JSON format. Status messages (such as `Moved 2 window(s)…`) go to stderr so stdout stays valid JSON |
+| `--json` | Output in JSON format. Commands that change windows print the changed windows instead of status messages such as `Moved 2 window(s)…` (see [Mutating command results](#mutating-command-results)) |
 | `--keep-going` | In a chain, run the remaining commands after one fails; exit with the first failure's code (see [Command chaining](#command-chaining)) |
 | `--help`, `-h` | Show help; after a command, show that command's help without running it |
 | `--version`, `-v` | Print version and exit |
@@ -163,7 +163,28 @@ $ window-tool --json --app Finder info 99
 | 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 
-**Warnings.** After a move or resize, window-tool re-reads the window's frame. When a set call failed, or the frame differs from the request by more than 2 points (a window with a minimum size, a fullscreen window), stderr gets `Warning: '<title>': size requested 400x300 but is 600x400` and the exit code stays 0. In a `--json` chain the command's entry also has a `warnings` array holding those messages; a single command prints them on stderr only.
+### Mutating command results
+
+With `--json`, every command that changes windows (`move`, `resize`, `snap`, `center`, `maximize`, `move-to-screen`, `focus`, `minimize`, `restore`, `fullscreen`, `unfullscreen`, `tile`, `columnize`, `stack`, `sidebar`, `restore-layout`, `shake`) prints the windows it changed, re-read after the change, in the `info` schema with the owning app's `bundle_id`. A window that was moved or resized also has `requested`, the frame it was asked for, so you can compare it with the frame it got. `index` is left out for a window that is not in its app's window list. `windows` is empty when nothing changed (`restore` with no minimized windows, `restore-layout` with no matching titles). The result is read right after the change, so `fullscreen` and `minimized` can still show the old state while macOS animates the transition; run `info` again to confirm. In a chain this object is the command's `data`. `save-layout` changes no windows; with `--json` it prints the layout it saved, plus `path`.
+
+After a move or resize, window-tool re-reads the frame. When a set call failed, or the frame differs from the request by more than 2 points (a window with a minimum size, a fullscreen window), stderr gets `Warning: '<title>': size requested 400x300 but is 600x400`, the same message goes in `warnings`, and the exit code stays 0.
+
+Abbreviated output:
+
+```sh
+$ window-tool --json --app Safari resize 0 400 300
+{
+  "warnings" : [ "'Start Page': size requested 400x300 but is 600x400" ],
+  "windows" : [
+    {
+      "bundle_id" : "com.apple.Safari", "index" : 0, "window_id" : 1341, "title" : "Start Page",
+      "x" : 100, "y" : 50, "width" : 600, "height" : 400,
+      "requested" : { "width" : 400, "height" : 300 },
+      "focused" : true, "main" : true, "minimized" : false, "fullscreen" : false, "modal" : false, ...
+    }
+  ]
+}
+```
 
 ## How it works
 

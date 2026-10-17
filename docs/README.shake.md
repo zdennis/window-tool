@@ -28,6 +28,8 @@ Rapidly moves the window left and right to draw attention to it, then returns it
 
 The options are the canonical form. For compatibility, `[offset] [count] [delay]` are still accepted as positionals after the window (`shake 0 20 4 0.05`), but not together with any option. Once an option is given, a bare number is only the window selector, so `+ shake --count 3` shakes the inherited window and `shake 2 --count 3` shakes window 2.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

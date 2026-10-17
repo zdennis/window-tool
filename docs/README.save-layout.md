@@ -20,6 +20,8 @@ Captures the index, title, position, and size of every window for the target app
 
 The JSON format includes the bundle ID and an array of window snapshots, making layout files portable across sessions.
 
+Prints `Saved N window(s) to <file>`. With `--json`, prints the saved layout with its `path` added instead.
+
 ## Examples
 
 ```sh

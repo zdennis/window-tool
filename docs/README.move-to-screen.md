@@ -19,6 +19,8 @@ window-tool [--app <name-or-id>] move-to-screen <window> <screen>
 
 Moves the window to the top-left of the visible area on the target screen. Use `screens` to see available display indices.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

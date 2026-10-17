@@ -49,6 +49,8 @@ If pushing a window would move it partially off-screen, its width or height is r
 
 The snapshot covers windows from all applications, not just the `--app` target.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

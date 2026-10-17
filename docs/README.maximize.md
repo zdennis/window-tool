@@ -20,6 +20,8 @@ Moves and resizes the window to fill the visible screen area (excluding menu bar
 
 This is not macOS fullscreen mode -- see `fullscreen` for that.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

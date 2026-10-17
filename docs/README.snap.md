@@ -27,6 +27,8 @@ Available positions: `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, 
 - `center` -- keeps current size, centers on screen
 - `maximize` -- fills the entire visible screen area
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

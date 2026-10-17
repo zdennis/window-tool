@@ -20,6 +20,8 @@ window-tool [--app <name-or-id>] resize <window> <width> <height>
 
 When using `title=<pattern>`, operates on all matching windows.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh

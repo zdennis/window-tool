@@ -21,18 +21,13 @@ struct Config {
     var chainFailedAt: Int?
     var runningCommand: String?
     var commandOutput: [Any] = []
-    var commandWarnings: [String] = []
 }
 
 var config = Config()
 
-/// Prints a human-readable status line; under `--json` it goes to stderr so stdout stays valid JSON.
+/// Prints a human-readable status line. Under `--json` it is skipped: the command's JSON result replaces it.
 func printStatus(_ message: String) {
-    if config.jsonOutput {
-        fputs(message + "\n", stderr)
-    } else {
-        print(message)
-    }
+    if !config.jsonOutput { print(message) }
 }
 
 func writeJSON(_ value: Any) {
@@ -53,12 +48,6 @@ func printJSON(_ value: Any) {
     }
 }
 
-/// Prints a warning to stderr (stdout stays valid JSON); in a `--json` chain it is also added to the command's entry.
-func printWarning(_ message: String) {
-    fputs("Warning: \(message)\n", stderr)
-    config.commandWarnings.append(message)
-}
-
 /// Under `--json` in a chain, closes the running command's entry: `data` is what it printed (null for
 /// nothing, an array when it printed more than once), or `error` is the given error object.
 func recordChainResult(error: [String: Any]? = nil) {
@@ -71,11 +60,9 @@ func recordChainResult(error: [String: Any]? = nil) {
         let output = config.commandOutput
         entry["data"] = output.isEmpty ? NSNull() : output.count == 1 ? output[0] : output
     }
-    if !config.commandWarnings.isEmpty { entry["warnings"] = config.commandWarnings }
     config.chainResults.append(entry)
     config.runningCommand = nil
     config.commandOutput = []
-    config.commandWarnings = []
 }
 
 /// Under `--json` in a chain, prints the `{"results", "failed_at"}` envelope. A command that exits
@@ -597,27 +584,28 @@ func getWindows(appElement: AXUIElement) -> [WindowInfo] {
     return result
 }
 
-/// What the last move/resize asked of one window, kept so `checkRequestedFrames` can compare it with the
-/// frame the window ended up with. Windows with a minimum size, fullscreen windows and windows on other
-/// Spaces can ignore a request without the set call failing.
-struct FrameRequest {
+/// A window the running command moved, resized or otherwise changed, with the frame it asked for, kept so
+/// `reportAffectedWindows` can re-read it afterwards. Windows with a minimum size, fullscreen windows and
+/// windows on other Spaces can ignore a request without the set call failing.
+struct AffectedWindow {
     let element: AXUIElement
     var position: CGPoint?
     var size: CGSize?
     var failures: [String] = []
 }
 
-var frameRequests: [FrameRequest] = []
+var affectedWindows: [AffectedWindow] = []
 
-func recordFrameRequest(_ window: AXUIElement, position: CGPoint? = nil, size: CGSize? = nil, failure: String? = nil) {
-    var index = frameRequests.firstIndex { CFEqual($0.element, window) }
-    if index == nil {
-        frameRequests.append(FrameRequest(element: window))
-        index = frameRequests.count - 1
-    }
-    frameRequests[index!].position = position ?? frameRequests[index!].position
-    frameRequests[index!].size = size ?? frameRequests[index!].size
-    if let failure { frameRequests[index!].failures.append(failure) }
+/// Records that the running command changed `window`. moveWindow/resizeWindow call it with what they requested;
+/// commands that change a window another way (focus, minimize, fullscreen) call it themselves.
+func recordAffectedWindow(_ window: AXUIElement, position: CGPoint? = nil, size: CGSize? = nil, failure: String? = nil) {
+    let index = affectedWindows.firstIndex { CFEqual($0.element, window) } ?? {
+        affectedWindows.append(AffectedWindow(element: window))
+        return affectedWindows.count - 1
+    }()
+    affectedWindows[index].position = position ?? affectedWindows[index].position
+    affectedWindows[index].size = size ?? affectedWindows[index].size
+    if let failure { affectedWindows[index].failures.append(failure) }
 }
 
 /// Moves a window to the specified screen coordinates.
@@ -625,7 +613,7 @@ func moveWindow(_ window: AXUIElement, x: CGFloat, y: CGFloat) {
     var point = CGPoint(x: x, y: y)
     guard let value = AXValueCreate(.cgPoint, &point) else { return }
     let result = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value)
-    recordFrameRequest(window, position: point, failure: result == .success ? nil : "could not set position (AXError \(result.rawValue))")
+    recordAffectedWindow(window, position: point, failure: result == .success ? nil : "could not set position (AXError \(result.rawValue))")
 }
 
 /// Resizes a window to the specified width and height.
@@ -633,28 +621,50 @@ func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
     var size = CGSize(width: width, height: height)
     guard let value = AXValueCreate(.cgSize, &size) else { return }
     let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
-    recordFrameRequest(window, size: size, failure: result == .success ? nil : "could not set size (AXError \(result.rawValue))")
+    recordAffectedWindow(window, size: size, failure: result == .success ? nil : "could not set size (AXError \(result.rawValue))")
 }
 
-/// Re-reads each window the finished command moved or resized and returns a warning for every set call that
-/// failed or left the frame more than 2 points from the request. Clears the recorded requests.
-func checkRequestedFrames() -> [String] {
-    defer { frameRequests = [] }
+/// Runs after each command. Re-reads every window it changed and prints `Warning: ...` to stderr for each set
+/// call that failed or left the frame more than 2 points from the request. With `asJSON` (a mutating command
+/// under `--json`) it prints the command's result: `{"windows": [...], "warnings": [...]}`, each window in the
+/// `info` schema after the change plus `requested` when a frame was asked for. Clears the recorded windows.
+func reportAffectedWindows(asJSON: Bool) {
+    defer { affectedWindows = [] }
     var warnings: [String] = []
-    for request in frameRequests {
-        var titleRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(request.element, kAXTitleAttribute as CFString, &titleRef)
-        let label = (titleRef as? String).map { "'\($0)'" } ?? "window"
-        warnings += request.failures.map { "\(label): \($0)" }
-        guard request.failures.isEmpty, let frame = currentFrame(of: request.element) else { continue }
-        if let p = request.position, abs(frame.origin.x - p.x) > 2 || abs(frame.origin.y - p.y) > 2 {
-            warnings.append("\(label): position requested \(Int(p.x)),\(Int(p.y)) but is \(Int(frame.origin.x)),\(Int(frame.origin.y))")
+    var windows: [[String: Any]] = []
+    for affected in affectedWindows {
+        let label = axString(affected.element, kAXTitleAttribute as String).map { "'\($0)'" } ?? "window"
+        var problems = affected.failures
+        if problems.isEmpty, let frame = currentFrame(of: affected.element) {
+            if let p = affected.position, abs(frame.origin.x - p.x) > 2 || abs(frame.origin.y - p.y) > 2 {
+                problems.append("position requested \(Int(p.x)),\(Int(p.y)) but is \(Int(frame.origin.x)),\(Int(frame.origin.y))")
+            }
+            if let s = affected.size, abs(frame.size.width - s.width) > 2 || abs(frame.size.height - s.height) > 2 {
+                problems.append("size requested \(Int(s.width))x\(Int(s.height)) but is \(Int(frame.size.width))x\(Int(frame.size.height))")
+            }
         }
-        if let s = request.size, abs(frame.size.width - s.width) > 2 || abs(frame.size.height - s.height) > 2 {
-            warnings.append("\(label): size requested \(Int(s.width))x\(Int(s.height)) but is \(Int(frame.size.width))x\(Int(frame.size.height))")
-        }
+        warnings += problems.map { "\(label): \($0)" }
+        guard asJSON, var window = affectedWindowJSON(affected.element) else { continue }
+        var requested: [String: Int] = [:]
+        if let p = affected.position { requested["x"] = Int(p.x); requested["y"] = Int(p.y) }
+        if let s = affected.size { requested["width"] = Int(s.width); requested["height"] = Int(s.height) }
+        if !requested.isEmpty { window["requested"] = requested }
+        windows.append(window)
     }
-    return warnings
+    warnings.forEach { fputs("Warning: \($0)\n", stderr) }
+    if asJSON { printJSON(["windows": windows, "warnings": warnings] as [String: Any]) }
+}
+
+/// A changed window in the `info` schema with its owner's `bundle_id`, or nil once it no longer exists.
+/// `index` is its place in the owner's window list, left out when the window is not in that list.
+func affectedWindowJSON(_ element: AXUIElement) -> [String: Any]? {
+    var pid: pid_t = 0
+    guard AXUIElementGetPid(element, &pid) == .success, currentFrame(of: element) != nil else { return nil }
+    let index = getWindows(appElement: AXUIElementCreateApplication(pid)).firstIndex { CFEqual($0.element, element) }
+    guard let info = makeWindowInfo(element: element, id: index ?? -1) else { return nil }
+    var json = windowInfoJSON(info, bundleId: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
+    if index == nil { json["index"] = nil }
+    return json
 }
 
 // MARK: - Window Resolution
@@ -891,34 +901,40 @@ func screensCommand() {
     }
 }
 
-/// Prints the visible bounds of the screen containing the mouse cursor.
-/// Output: tab-separated x, y (top-left origin), width, height of the usable area.
-func printWindowInfo(_ w: WindowInfo, bundleId: String? = nil) {
-    let minimized = axBool(w.element, kAXMinimizedAttribute as String)
-    let fullscreen = axBool(w.element, "AXFullScreen")
-    let focused = axBool(w.element, kAXFocusedAttribute as String)
-    let main = axBool(w.element, kAXMainAttribute as String)
-    let modal = axBool(w.element, "AXModal")
-    let role = axString(w.element, kAXRoleAttribute as String)
-    let subrole = axString(w.element, kAXSubroleAttribute as String)
-    let document = axString(w.element, kAXDocumentAttribute as String)
+/// A window in the `info` JSON schema; mutating commands report the windows they changed in it too.
+func windowInfoJSON(_ w: WindowInfo, bundleId: String? = nil) -> [String: Any] {
+    var dict: [String: Any] = [
+        "title": w.title,
+        "x": Int(w.position.x), "y": Int(w.position.y),
+        "width": Int(w.size.width), "height": Int(w.size.height),
+        "minimized": axBool(w.element, kAXMinimizedAttribute as String),
+        "fullscreen": axBool(w.element, "AXFullScreen"),
+        "focused": axBool(w.element, kAXFocusedAttribute as String),
+        "main": axBool(w.element, kAXMainAttribute as String),
+        "modal": axBool(w.element, "AXModal")
+    ]
+    if let bundleId = bundleId { dict["bundle_id"] = bundleId }
+    if let parent = w.parentIndex { dict["parent_index"] = parent } else { dict["index"] = w.id }
+    if let wid = w.windowID { dict["window_id"] = Int(wid) }
+    if let role = axString(w.element, kAXRoleAttribute as String) { dict["role"] = role }
+    if let subrole = axString(w.element, kAXSubroleAttribute as String) { dict["subrole"] = subrole }
+    if let document = axString(w.element, kAXDocumentAttribute as String) { dict["document"] = document }
+    return dict
+}
 
+/// Prints a window's details: the `info` JSON schema under `--json`, otherwise tab-separated key-value lines.
+func printWindowInfo(_ w: WindowInfo, bundleId: String? = nil) {
     if config.jsonOutput {
-        var dict: [String: Any] = [
-            "title": w.title,
-            "x": Int(w.position.x), "y": Int(w.position.y),
-            "width": Int(w.size.width), "height": Int(w.size.height),
-            "minimized": minimized, "fullscreen": fullscreen,
-            "focused": focused, "main": main, "modal": modal
-        ]
-        if let bundleId = bundleId { dict["bundle_id"] = bundleId }
-        if let parent = w.parentIndex { dict["parent_index"] = parent } else { dict["index"] = w.id }
-        if let wid = w.windowID { dict["window_id"] = Int(wid) }
-        if let role = role { dict["role"] = role }
-        if let subrole = subrole { dict["subrole"] = subrole }
-        if let document = document { dict["document"] = document }
-        printJSON(dict)
+        printJSON(windowInfoJSON(w, bundleId: bundleId))
     } else {
+        let minimized = axBool(w.element, kAXMinimizedAttribute as String)
+        let fullscreen = axBool(w.element, "AXFullScreen")
+        let focused = axBool(w.element, kAXFocusedAttribute as String)
+        let main = axBool(w.element, kAXMainAttribute as String)
+        let modal = axBool(w.element, "AXModal")
+        let role = axString(w.element, kAXRoleAttribute as String)
+        let subrole = axString(w.element, kAXSubroleAttribute as String)
+        let document = axString(w.element, kAXDocumentAttribute as String)
         if let bundleId = bundleId { print("bundle_id:\t\(bundleId)") }
         if let parent = w.parentIndex { print("parent_index:\t\(parent)") } else { print("index:\t\(w.id)") }
         if let wid = w.windowID { print("window_id:\t\(wid)") }
@@ -1103,6 +1119,7 @@ func focusCommand(bundleId: String, selector: WindowSelector) throws {
     activateOwner(of: window)
     AXUIElementSetAttributeValue(window.element, kAXMainAttribute as CFString, true as CFTypeRef)
     AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+    recordAffectedWindow(window.element)
 }
 
 /// Activates the application that owns the window, which may differ from `--app` when an `id=` selector resolved cross-app.
@@ -1799,12 +1816,14 @@ func sidebarUnpushCommand() throws {
 func fullscreenCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, true as CFTypeRef)
+    recordAffectedWindow(window.element)
 }
 
 /// Exits macOS fullscreen mode for a window.
 func unfullscreenCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     AXUIElementSetAttributeValue(window.element, "AXFullScreen" as CFString, false as CFTypeRef)
+    recordAffectedWindow(window.element)
 }
 
 /// Moves a window to a different screen, placing it at the top-left of the visible area.
@@ -1823,6 +1842,7 @@ func moveToScreenCommand(bundleId: String, selector: WindowSelector, screenIndex
 func minimizeCommand(bundleId: String, selector: WindowSelector) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     AXUIElementSetAttributeValue(window.element, kAXMinimizedAttribute as CFString, true as CFTypeRef)
+    recordAffectedWindow(window.element)
 }
 
 /// Restores (unminimizes) all minimized windows for the given application.
@@ -1837,6 +1857,7 @@ func restoreCommand(bundleId: String) throws {
         AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimizedRef)
         if let minimized = minimizedRef as? Bool, minimized {
             AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
+            recordAffectedWindow(window)
             restored += 1
         }
     }
@@ -2456,6 +2477,10 @@ func saveLayoutCommand(bundleId: String, filePath: String) throws {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     let data = try encoder.encode(layout)
     try data.write(to: URL(fileURLWithPath: filePath))
+    if config.jsonOutput, var saved = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        saved["path"] = filePath
+        printJSON(saved)
+    }
     printStatus("Saved \(windows.count) window(s) to \(filePath)")
 }
 
@@ -2691,7 +2716,8 @@ enum AppUsage {
 }
 
 /// One command's help. `synopsis` lists positional arguments only; " [options]" is added when `flags` is non-empty.
-/// `mutates` is true when the command changes a window's position, size, state or focus.
+/// `mutates` is true when the command changes a window's position, size, state or focus; under `--json` such a
+/// command prints the windows it recorded with `recordAffectedWindow` (see `reportAffectedWindows`).
 /// `needsAccessibility` and `resolvesOwnApp` drive `runCommand`'s up-front checks; `commands --json` reports them.
 struct CommandSpec {
     let name: String
@@ -2960,8 +2986,9 @@ func usage() {
       Unknown options and extra arguments are errors; the command does not run.
 
     Output:
-      Results go to stdout and errors to stderr. With --json, status messages
-      also go to stderr so stdout holds only JSON.
+      Results go to stdout and errors to stderr. With --json, a command that changes
+      windows prints {"windows": [...], "warnings": [...]} instead of a status message:
+      each changed window in the info schema, plus "requested" if it was moved or resized.
 
     Errors and exit codes:
       With --json, an error also prints {"error": {"code", "message", "details"}}
@@ -2973,8 +3000,7 @@ func usage() {
       After a move or resize, the window's frame is re-read. If a set call failed or
       the frame differs from the request by more than 2 points (a minimum size, a
       fullscreen window), stderr gets "Warning: '<title>': size requested WxH but is WxH" and the exit
-      code stays 0. In a --json chain the entry also has a "warnings" array; a
-      single command prints them on stderr only.
+      code stays 0. With --json the message is also in the result's "warnings".
 
     Command chaining:
       Use + to run multiple commands in sequence, sharing --app and --json flags.
@@ -3295,10 +3321,10 @@ for (index, group) in commandGroups.enumerated() {
     config.runningCommand = group[0]
     do {
         try runCommand(group)
-        checkRequestedFrames().forEach(printWarning)
+        reportAffectedWindows(asJSON: config.jsonOutput && commandSpec(named: group[0])?.mutates == true)
         recordChainResult()
     } catch {
-        frameRequests = []
+        affectedWindows = []
         var error = error
         if case WindowToolError.optionNeedsValue(let option, nil) = error {
             error = WindowToolError.optionNeedsValue(option, command: group[0])

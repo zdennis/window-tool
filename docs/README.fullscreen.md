@@ -20,6 +20,8 @@ Enters native macOS fullscreen mode (the window gets its own Space). This is dif
 
 Use `unfullscreen` to exit fullscreen mode.
 
+With `--json`, prints the changed window(s) in the `info` schema, plus `requested` for a window that was moved or resized and any warnings; see [Mutating command results](../README.md#mutating-command-results).
+
 ## Examples
 
 ```sh
