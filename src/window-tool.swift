@@ -607,6 +607,9 @@ struct AffectedWindow {
 
 var affectedWindows: [AffectedWindow] = []
 
+/// Warnings a command adds on its own (for example saved windows `restore-layout` could not match); reported with the frame warnings.
+var commandWarnings: [String] = []
+
 /// Records that the running command changed `window`. moveWindow/resizeWindow call it with what they requested;
 /// commands that change a window another way (focus, minimize, fullscreen) call it themselves.
 func recordAffectedWindow(_ window: AXUIElement, position: CGPoint? = nil, size: CGSize? = nil, failure: String? = nil) {
@@ -640,8 +643,8 @@ func resizeWindow(_ window: AXUIElement, width: CGFloat, height: CGFloat) {
 /// under `--json`) it prints the command's result: `{"windows": [...], "warnings": [...]}`, each window in the
 /// `info` schema after the change plus `requested` when a frame was asked for. Clears the recorded windows.
 func reportAffectedWindows(asJSON: Bool) {
-    defer { affectedWindows = [] }
-    var warnings: [String] = []
+    defer { affectedWindows = []; commandWarnings = [] }
+    var warnings = commandWarnings
     var windows: [[String: Any]] = []
     for affected in affectedWindows {
         let label = axString(affected.element, kAXTitleAttribute as String).map { "'\($0)'" } ?? "window"
@@ -2528,7 +2531,8 @@ func saveLayoutCommand(bundleId: String, filePath: String) throws {
 }
 
 /// Restores window positions and sizes from a previously saved layout file.
-/// Matches windows by title. Windows that can't be matched are skipped.
+/// Matches each saved window to a current one by window ID, then title, then index; a current window is used at
+/// most once. Saved windows with no match are skipped and reported as warnings.
 func restoreLayoutCommand(filePath: String) throws {
     guard FileManager.default.fileExists(atPath: filePath) else {
         throw WindowToolError.fileNotFound(filePath)
@@ -2537,15 +2541,33 @@ func restoreLayoutCommand(filePath: String) throws {
     let layout = try JSONDecoder().decode(WindowLayout.self, from: data)
     let app = try requireApp(layout.bundleId)
     let currentWindows = getWindows(appElement: app)
-    var restored = 0
-    for saved in layout.windows {
-        if let match = currentWindows.first(where: { $0.title == saved.title }) {
-            moveWindow(match.element, x: CGFloat(saved.x), y: CGFloat(saved.y))
-            resizeWindow(match.element, width: CGFloat(saved.width), height: CGFloat(saved.height))
-            restored += 1
+    // WindowInfo.id is the position in getWindows, unique here (it is -1 only for windows outside that list).
+    var claimed = Set<Int>()
+    var matches: [Int: WindowInfo] = [:]
+    let strategies: [(WindowSnapshot, WindowInfo) -> Bool] = [
+        { saved, current in saved.windowID != nil && saved.windowID == current.windowID.map { Int($0) } },
+        { saved, current in saved.title == current.title },
+        // Last resort: whatever window now sits at the saved index, which may be an unrelated one.
+        { saved, current in saved.index == current.id },
+    ]
+    for strategy in strategies {
+        for (position, saved) in layout.windows.enumerated() where matches[position] == nil {
+            if let match = currentWindows.first(where: { !claimed.contains($0.id) && strategy(saved, $0) }) {
+                claimed.insert(match.id)
+                matches[position] = match
+            }
         }
     }
-    printStatus("Restored \(restored)/\(layout.windows.count) window(s) for \(layout.bundleId)")
+    for (position, saved) in layout.windows.enumerated() {
+        guard let match = matches[position] else {
+            let id = saved.windowID.map { ", id=\($0)" } ?? ""
+            commandWarnings.append("no window matches saved '\(saved.title)' (index \(saved.index)\(id)); skipped")
+            continue
+        }
+        moveWindow(match.element, x: CGFloat(saved.x), y: CGFloat(saved.y))
+        resizeWindow(match.element, width: CGFloat(saved.width), height: CGFloat(saved.height))
+    }
+    printStatus("Restored \(matches.count)/\(layout.windows.count) window(s) for \(layout.bundleId)")
 }
 
 /// Cascades all windows for an application, offsetting each by a fixed amount.
@@ -3384,6 +3406,7 @@ for (index, group) in commandGroups.enumerated() {
         recordChainResult()
     } catch {
         affectedWindows = []
+        commandWarnings = []
         var error = error
         if case WindowToolError.optionNeedsValue(let option, nil) = error {
             error = WindowToolError.optionNeedsValue(option, command: group[0])

@@ -16,7 +16,7 @@ window-tool --app <name-or-id> save-layout <file>
 
 ## Details
 
-Captures the index, window ID, title, position, and size of every window for the target application and writes them to a JSON file. Use `restore-layout` to restore the saved positions later.
+Captures the index, window ID (used by `restore-layout` to match windows), title, position, and size of every window for the target application and writes them to a JSON file. Use `restore-layout` to restore the saved positions later.
 
 The JSON format includes the bundle ID and an array of window snapshots, making layout files portable across sessions.
 
