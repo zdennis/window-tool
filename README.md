@@ -50,7 +50,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 
 | Command | Docs | Description |
 |---------|------|-------------|
-| `active-screen` | [README](docs/README.active-screen.md) | Print active screen usable bounds |
+| `active-screen` | [README](docs/README.active-screen.md) | Print active screen usable bounds (--json: its screens entry) |
 | `active-window` | [README](docs/README.active-window.md) | Print info about the frontmost window |
 | `border` | [README](docs/README.border.md) | Add a persistent border that tracks a window |
 | `center` | [README](docs/README.center.md) | Center a window on screen, optionally resizing |
@@ -77,7 +77,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `restore` | [README](docs/README.restore.md) | Restore all minimized windows |
 | `restore-layout` | [README](docs/README.restore-layout.md) | Restore window layout from a JSON file |
 | `save-layout` | [README](docs/README.save-layout.md) | Save window layout to a JSON file |
-| `screens` | [README](docs/README.screens.md) | List all displays with bounds |
+| `screens` | [README](docs/README.screens.md) | List all displays with bounds and scale in window coordinates |
 | `shake` | [README](docs/README.shake.md) | Shake a window to draw attention |
 | `shell-init` | [README](docs/README.shell-init.md) | Print shell integration snippet |
 | `sidebar` | [README](docs/README.sidebar.md) | Pin a window to screen edge as a sidebar |

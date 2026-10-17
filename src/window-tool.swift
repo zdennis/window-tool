@@ -882,38 +882,37 @@ func cocoaToAX(rect: NSRect) -> NSRect {
     NSRect(x: rect.origin.x, y: NSScreen.screens[0].frame.height - rect.maxY, width: rect.width, height: rect.height)
 }
 
-/// Prints info for all connected displays.
-/// Output columns: index, frame origin, frame size, visible origin, visible size, and flags ([main], [mouse]).
+/// A display in the `screens` JSON schema, in the same global top-left coordinates windows use. `active-screen` prints the same object.
+func screenJSON(index: Int, screen: NSScreen, mouseLocation: NSPoint) -> [String: Any] {
+    let frame = cocoaToAX(rect: screen.frame)
+    let visible = cocoaToAX(rect: screen.visibleFrame)
+    return [
+        "index": index,
+        "frame_x": Int(frame.origin.x), "frame_y": Int(frame.origin.y),
+        "frame_width": Int(frame.width), "frame_height": Int(frame.height),
+        "visible_x": Int(visible.origin.x), "visible_y": Int(visible.origin.y),
+        "visible_width": Int(visible.width), "visible_height": Int(visible.height),
+        "scale": Double(screen.backingScaleFactor),
+        "main": screen == NSScreen.main,
+        "mouse": screen.frame.contains(mouseLocation)
+    ]
+}
+
+/// Prints info for all connected displays in global top-left coordinates (the same ones `info` and `move` use).
+/// Output columns: index, frame origin, frame size, visible origin, visible size, scale, and flags ([main], [mouse]).
 func screensCommand() {
     let mouseLocation = NSEvent.mouseLocation
+    let items = NSScreen.screens.enumerated().map { screenJSON(index: $0.offset, screen: $0.element, mouseLocation: mouseLocation) }
     if config.jsonOutput {
-        var items: [[String: Any]] = []
-        for (index, screen) in NSScreen.screens.enumerated() {
-            let frame = screen.frame
-            let visible = screen.visibleFrame
-            items.append([
-                "index": index,
-                "frame_x": Int(frame.origin.x), "frame_y": Int(frame.origin.y),
-                "frame_width": Int(frame.width), "frame_height": Int(frame.height),
-                "visible_x": Int(visible.origin.x), "visible_y": Int(visible.origin.y),
-                "visible_width": Int(visible.width), "visible_height": Int(visible.height),
-                "main": screen == NSScreen.main,
-                "mouse": frame.contains(mouseLocation)
-            ])
-        }
         printJSON(items)
     } else {
-        print("INDEX\tFRAME_ORIGIN\tFRAME_SIZE\tVISIBLE_ORIGIN\tVISIBLE_SIZE\tFLAGS")
-        for (index, screen) in NSScreen.screens.enumerated() {
-            let frame = screen.frame
-            let visible = screen.visibleFrame
-            let isMain = (screen == NSScreen.main)
-            let containsMouse = frame.contains(mouseLocation)
+        print("INDEX\tFRAME_ORIGIN\tFRAME_SIZE\tVISIBLE_ORIGIN\tVISIBLE_SIZE\tSCALE\tFLAGS")
+        for item in items {
             var flags: [String] = []
-            if isMain { flags.append("main") }
-            if containsMouse { flags.append("mouse") }
+            if item["main"] as? Bool == true { flags.append("main") }
+            if item["mouse"] as? Bool == true { flags.append("mouse") }
             let flagStr = flags.isEmpty ? "" : "[\(flags.joined(separator: ","))]"
-            print("\(index)\t\(Int(frame.origin.x)),\(Int(frame.origin.y))\t\(Int(frame.width))x\(Int(frame.height))\t\(Int(visible.origin.x)),\(Int(visible.origin.y))\t\(Int(visible.width))x\(Int(visible.height))\t\(flagStr)")
+            print("\(item["index"]!)\t\(item["frame_x"]!),\(item["frame_y"]!)\t\(item["frame_width"]!)x\(item["frame_height"]!)\t\(item["visible_x"]!),\(item["visible_y"]!)\t\(item["visible_width"]!)x\(item["visible_height"]!)\t\(item["scale"]!)\t\(flagStr)")
         }
     }
 }
@@ -1019,18 +1018,18 @@ func shellInitCommand(shell: String) throws {
     }
 }
 
+/// Prints the screen containing the mouse cursor: under `--json` the same object as its `screens` entry, otherwise its usable area.
 func activeScreenCommand() {
-    // Return the screen containing the mouse cursor (the "active" screen)
     let mouseLocation = NSEvent.mouseLocation
-    let screen = NSScreen.screens.first { $0.frame.contains(mouseLocation) } ?? NSScreen.main ?? NSScreen.screens[0]
-    // Usable area (excludes menu bar and Dock) in AX global top-left coordinates, ready for window positioning
-    let visible = cocoaToAX(rect: screen.visibleFrame)
+    let screens = NSScreen.screens
+    let index = screens.firstIndex { $0.frame.contains(mouseLocation) }
+        ?? NSScreen.main.flatMap { screens.firstIndex(of: $0) } ?? 0
+    let entry = screenJSON(index: index, screen: screens[index], mouseLocation: mouseLocation)
     if config.jsonOutput {
-        printJSON(["x": Int(visible.origin.x), "y": Int(visible.origin.y),
-                   "width": Int(visible.width), "height": Int(visible.height)])
+        printJSON(entry)
     } else {
         print("X\tY\tWIDTH\tHEIGHT")
-        print("\(Int(visible.origin.x))\t\(Int(visible.origin.y))\t\(Int(visible.width))\t\(Int(visible.height))")
+        print("\(entry["visible_x"]!)\t\(entry["visible_y"]!)\t\(entry["visible_width"]!)\t\(entry["visible_height"]!)")
     }
 }
 
@@ -2835,9 +2834,9 @@ let commandSpecs: [CommandSpec] = [
                 summary: "Print info about the frontmost app's primary window",
                 flags: [("--id", "Print only the window ID")]),
     CommandSpec(name: "active-screen", group: .query, app: .none, mutates: false,
-                summary: "Print the active screen's usable bounds (x, y, width, height)", needsAccessibility: false),
+                summary: "Print the active screen's usable bounds (--json: its full screens entry)", needsAccessibility: false),
     CommandSpec(name: "screens", group: .query, app: .none, mutates: false,
-                summary: "List all displays with bounds", needsAccessibility: false),
+                summary: "List all displays with bounds and scale in window coordinates", needsAccessibility: false),
     CommandSpec(name: "pick", group: .query, app: .none, mutates: false,
                 summary: "Click a window to print its ID (blocks until you click)", needsAccessibility: false),
     CommandSpec(name: "watch", group: .query, app: .required, mutates: false, synopsis: "[--interval <seconds>]",
