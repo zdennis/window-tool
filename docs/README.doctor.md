@@ -11,7 +11,7 @@ window-tool doctor --json
 
 ## Details
 
-Checks Accessibility (needed by every command that reads or changes windows) and Screen Recording (needed by `preview` and `record`). It never needs either permission itself, and exits 0 whether or not they are granted, so read the result rather than the exit code.
+Checks Accessibility (needed by every command that reads or changes windows) and Screen Recording (needed by `preview`, `record` and `pip`). It never needs either permission itself, and exits 0 whether or not they are granted, so read the result rather than the exit code.
 
 Without `--json`, prints the version, then one `granted` or `missing` line per permission. With `--json` (anywhere on the command line), prints one object:
 

@@ -2886,6 +2886,17 @@ func parseRecordFlags(_ args: inout [String]) throws -> (output: String, fps: In
     return (output, fps, duration, countdown, border)
 }
 
+/// The image in a ScreenCaptureKit sample, or nil when the sample holds no new frame (SCK also sends idle and blank samples).
+func completeFrame(_ sampleBuffer: CMSampleBuffer) -> CVPixelBuffer? {
+    guard sampleBuffer.isValid,
+          let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+          let statusValue = attachments.first?[.status] as? Int,
+          SCFrameStatus(rawValue: statusValue) == .complete else {
+        return nil
+    }
+    return CMSampleBufferGetImageBuffer(sampleBuffer)
+}
+
 class RecordingDelegate: NSObject, SCStreamOutput {
     let assetWriter: AVAssetWriter
     let videoInput: AVAssetWriterInput
@@ -2941,17 +2952,7 @@ class RecordingDelegate: NSObject, SCStreamOutput {
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen else { return }
-        guard sampleBuffer.isValid else { return }
-
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-              let statusValue = attachments.first?[.status] as? Int,
-              let status = SCFrameStatus(rawValue: statusValue),
-              status == .complete else {
-            return
-        }
-
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard type == .screen, let pixelBuffer = completeFrame(sampleBuffer) else { return }
 
         lock.lock()
         lastPixelBuffer = pixelBuffer
@@ -3167,6 +3168,174 @@ func recordCommand(bundleId: String, selector: WindowSelector, output: String, f
     }
 
     app.run()
+}
+
+// MARK: - Pip Command
+
+enum PipCorner: String, CaseIterable {
+    case topLeft = "top-left"
+    case topRight = "top-right"
+    case bottomLeft = "bottom-left"
+    case bottomRight = "bottom-right"
+}
+
+func parsePipFlags(_ args: inout [String]) throws -> (scale: Double, corner: PipCorner, fps: Int, duration: Double?) {
+    let scale = try takeOption("--scale", from: &args).map { value in
+        guard let scale = Double(value), scale > 0 && scale <= 1 else {
+            throw WindowToolError.invalidValue(name: "--scale", expected: "a number greater than 0 and at most 1", got: value)
+        }
+        return scale
+    } ?? 0.3
+    let corner = try takeOption("--position", from: &args).map { value in
+        guard let corner = PipCorner(rawValue: value) else {
+            throw WindowToolError.unknownChoice(kind: "position", value: value, choices: PipCorner.allCases.map(\.rawValue))
+        }
+        return corner
+    } ?? .bottomRight
+    // Capped so CMTimeScale (an Int32) cannot overflow.
+    let fps = try takeOption("--fps", from: &args).map { value in
+        guard let fps = Int(value), (1...120).contains(fps) else {
+            throw WindowToolError.invalidValue(name: "--fps", expected: "a whole number from 1 to 120", got: value)
+        }
+        return fps
+    } ?? 10
+    let duration = try takeOption("--duration", from: &args).map { try parsePositiveDouble($0, label: "--duration") }
+    return (scale, corner, fps, duration)
+}
+
+/// The thumbnail's frame in Cocoa coordinates: the window's size times `scale`, shrunk further when needed to fit
+/// `visible`, placed `margin` points in from `corner`.
+func pipFrame(windowSize: CGSize, scale: Double, corner: PipCorner, visible: NSRect, margin: CGFloat = 20) -> NSRect {
+    let fit = min(CGFloat(scale), (visible.width - 2 * margin) / windowSize.width, (visible.height - 2 * margin) / windowSize.height)
+    let width = max(1, (windowSize.width * fit).rounded())
+    let height = max(1, (windowSize.height * fit).rounded())
+    let x = corner == .topLeft || corner == .bottomLeft ? visible.minX + margin : visible.maxX - margin - width
+    let y = corner == .bottomLeft || corner == .bottomRight ? visible.minY + margin : visible.maxY - margin - height
+    return NSRect(x: x, y: y, width: width, height: height)
+}
+
+/// Shows each new frame of the captured window in `layer`, and passes on the error of a stream that stops by itself.
+class PipStreamOutput: NSObject, SCStreamOutput, SCStreamDelegate {
+    let layer: CALayer
+    let onStop: (any Error) -> Void
+
+    init(layer: CALayer, onStop: @escaping (any Error) -> Void) {
+        self.layer = layer
+        self.onStop = onStop
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen, let pixelBuffer = completeFrame(sampleBuffer),
+              let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() else { return }
+        layer.contents = surface
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: any Error) {
+        DispatchQueue.main.async { self.onStop(error) }
+    }
+}
+
+/// Shows a live, scaled copy of a window in an always-on-top thumbnail. Blocks until Ctrl-C, until the window
+/// closes, or until `duration` seconds pass. Its lifecycle mirrors `recordCommand`: an SCStream feeding an
+/// NSApplication run loop that signal sources stop.
+func pipCommand(bundleId: String, selector: WindowSelector, scale: Double, corner: PipCorner, fps: Int, duration: Double?) throws {
+    let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    guard let windowID = window.windowID else {
+        throw WindowToolError.operationFailed("Cannot capture window — no window ID available")
+    }
+    guard CGPreflightScreenCaptureAccess() else {
+        throw WindowToolError.screenRecordingNotEnabled
+    }
+
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+
+    let screen = NSScreen.main ?? NSScreen.screens[0]
+    let frame = pipFrame(windowSize: window.size, scale: scale, corner: corner, visible: screen.visibleFrame)
+    let thumbnail = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+    thumbnail.backgroundColor = .black
+    thumbnail.level = .floating
+    thumbnail.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    thumbnail.isMovableByWindowBackground = true
+    let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
+    view.wantsLayer = true
+    view.layer?.contentsGravity = .resizeAspect
+    thumbnail.contentView = view
+    thumbnail.orderFrontRegardless()
+
+    // Set by the first stop, so a second stop, a late stream start or a timer cannot stop a later command in the chain.
+    var finished = false
+    var stopError: (any Error)?
+    func stop(_ error: (any Error)? = nil) {
+        guard !finished else { return }
+        finished = true
+        // A capture that ends because its window closed is the normal way out, not a failure.
+        if let error, stopError == nil, currentFrame(of: window.element) != nil {
+            stopError = error
+        }
+        // app.stop only takes effect after the run loop handles an event, so post one to wake it now.
+        app.stop(nil)
+        let event = NSEvent.otherEvent(with: .applicationDefined,
+            location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!
+        app.postEvent(event, atStart: true)
+    }
+
+    let output = PipStreamOutput(layer: view.layer!, onStop: { stop($0) })
+    let streamConfig = SCStreamConfiguration()
+    streamConfig.width = Int(frame.width * screen.backingScaleFactor)
+    streamConfig.height = Int(frame.height * screen.backingScaleFactor)
+    streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+    streamConfig.pixelFormat = kCVPixelFormatType_32BGRA
+    streamConfig.showsCursor = false
+    streamConfig.queueDepth = 3
+    streamConfig.scalesToFit = true
+    var stream: SCStream?
+    Task { @MainActor in
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            guard let scWindow = content.windows.first(where: { $0.windowID == windowID }) else {
+                throw WindowToolError.noWindowMatchingID(windowID)
+            }
+            let started = SCStream(filter: SCContentFilter(desktopIndependentWindow: scWindow), configuration: streamConfig, delegate: output)
+            try started.addStreamOutput(output, type: .screen, sampleHandlerQueue: .main)
+            try await started.startCapture()
+            if finished {
+                try? await started.stopCapture()
+            } else {
+                stream = started
+                fputs("Showing window \(windowID) in a thumbnail; drag it to move it, press Ctrl-C to close it\n", stderr)
+            }
+        } catch {
+            stop(error)
+        }
+    }
+
+    let signalSources = [SIGINT, SIGTERM].map { signalNumber in
+        signal(signalNumber, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+        source.setEventHandler { stop() }
+        source.resume()
+        return source
+    }
+    let closeCheck = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+        if currentFrame(of: window.element) == nil { stop() }
+    }
+    let durationTimer = duration.map { Timer.scheduledTimer(withTimeInterval: $0, repeats: false) { _ in stop() } }
+
+    app.run()
+
+    closeCheck.invalidate()
+    durationTimer?.invalidate()
+    stream?.stopCapture()
+    thumbnail.orderOut(nil)
+    for source in signalSources { source.cancel() }
+    signal(SIGINT, SIG_DFL)
+    signal(SIGTERM, SIG_DFL)
+    if let error = stopError as? SCStreamError, error.code == .userDeclined {
+        throw WindowToolError.screenRecordingNotEnabled
+    }
+    if let stopError { throw stopError }
 }
 
 // MARK: - Identify Command
@@ -4235,6 +4404,12 @@ let commandSpecs: [CommandSpec] = [
                         ("--duration <seconds>", "Stop after this long (default: until Ctrl-C)"),
                         ("--no-countdown", "Skip the 3-second countdown"),
                         ("--no-border", "Don't show a border while recording")]),
+    CommandSpec(name: "pip", group: .capture, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Show a live, always-on-top thumbnail of a window (blocks until Ctrl-C)",
+                flags: [("--scale <factor>", "Size relative to the window, greater than 0 and at most 1 (default: 0.3)"),
+                        ("--position <corner>", "top-left, top-right, bottom-left or bottom-right of the focused screen (default: bottom-right)"),
+                        ("--fps N", "Most frames per second to show, 1 to 120 (default: 10)"),
+                        ("--duration <seconds>", "Close the thumbnail after this long (default: until Ctrl-C)")]),
 
     CommandSpec(name: "help", group: .meta, app: .none, mutates: false, synopsis: "[<command>]",
                 summary: "Show all commands, or one command's arguments and options", needsAccessibility: false),
@@ -4272,7 +4447,7 @@ func doctorCommand() {
         }
         print("window-tool \(VERSION)")
         print(row("Accessibility", accessibility, "needed by every command that reads or changes windows"))
-        print(row("Screen Recording", screenRecording, "needed by preview and record"))
+        print(row("Screen Recording", screenRecording, "needed by preview, record and pip"))
     }
 }
 
@@ -4794,6 +4969,10 @@ func runCommand(_ args: [String]) throws {
         let recordFlags = try parseRecordFlags(&rest)
         let selector = try resolveSelectorAndArgs(rest, command: command).selector
         try recordCommand(bundleId: config.bundleId, selector: selector, output: recordFlags.output, fps: recordFlags.fps, duration: recordFlags.duration, countdown: recordFlags.countdown, border: recordFlags.border)
+    case "pip":
+        let pipFlags = try parsePipFlags(&rest)
+        let selector = try resolveSelectorAndArgs(rest, command: command).selector
+        try pipCommand(bundleId: config.bundleId, selector: selector, scale: pipFlags.scale, corner: pipFlags.corner, fps: pipFlags.fps, duration: pipFlags.duration)
     case "screens":
         try checkArgs(rest, command: command)
         screensCommand()
