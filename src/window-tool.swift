@@ -129,7 +129,7 @@ enum WindowToolError: LocalizedError {
     case unknownOption(String, command: String)
     /// `command` is nil for a repeated global flag (--json, --first, --keep-going), which belongs to no command.
     case repeatedOption(String, command: String?)
-    case unexpectedArgument(String, command: String)
+    case unexpectedArgument(String, command: String, conflictsWith: String? = nil)
     /// `command` is nil when thrown by takeOption; the top-level catch fills it in.
     case optionNeedsValue(String, command: String?)
     case optionTakesNoValue(String, command: String)
@@ -207,7 +207,9 @@ enum WindowToolError: LocalizedError {
             return "Unknown option '\(option)' for '\(command)'. Run 'window-tool \(command) --help'."
         case .repeatedOption(let option, let command):
             return "Option '\(option)' given more than once" + (command.map { " for '\($0)'. Run 'window-tool \($0) --help'." } ?? ". Give it once. Run 'window-tool help'.")
-        case .unexpectedArgument(let arg, let command):
+        case .unexpectedArgument(let arg, let command, let other?):
+            return "\(arg) and \(other) are alternatives; use one. Run 'window-tool \(command) --help'."
+        case .unexpectedArgument(let arg, let command, nil):
             return "Unexpected argument '\(arg)' for '\(command)'. Run 'window-tool \(command) --help'."
         case .optionNeedsValue(let option, let command):
             return "Option '\(option)' requires a value" + (command.map { ". Run 'window-tool \($0) --help'." } ?? "")
@@ -310,8 +312,10 @@ enum WindowToolError: LocalizedError {
             return ["option": option, "command": command]
         case .repeatedOption(let option, let command):
             return ["option": option, "command": command ?? NSNull()]
-        case .unexpectedArgument(let argument, let command):
-            return ["argument": argument, "command": command]
+        case .unexpectedArgument(let argument, let command, let other):
+            var details: [String: Any] = ["argument": argument, "command": command]
+            if let other { details["conflicts_with"] = other }
+            return details
         case .optionNeedsValue(let option, let command):
             return ["option": option, "command": command ?? NSNull()]
         case .unknownCommand(let command):
@@ -1926,7 +1930,49 @@ func parseRectFlag(_ args: inout [String]) throws -> SnapFractions? {
     return SnapFractions(x: v[0], y: v[1], width: v[2], height: v[3])
 }
 
-/// Snaps a window to a named screen region, or to `rect` (fractions of the visible frame).
+/// Parses `--grid=<cols>x<rows> --cell=<col>,<row> [--span=<cols>,<rows>]` into fractions of the visible frame.
+/// Cells count from 0 at the top left, like window indexes; the span defaults to one cell.
+func parseGridFlags(_ args: inout [String]) throws -> SnapFractions? {
+    let grid = try takeOption("--grid", from: &args)
+    let cell = try takeOption("--cell", from: &args)
+    let span = try takeOption("--span", from: &args)
+    guard let grid else {
+        if cell != nil || span != nil {
+            throw WindowToolError.optionRequired(option: "--grid", command: "snap", placeholder: "<cols>x<rows> when --cell or --span is given")
+        }
+        return nil
+    }
+    // Splits a flag's value into exactly two whole numbers of at least `min`; otherwise fails naming the flag.
+    func pair(_ name: String, _ value: String, separator: Character, min: Int, expected: String) throws -> (Int, Int) {
+        let parts = value.split(separator: separator, omittingEmptySubsequences: false).map { Int($0) }
+        guard parts.count == 2, let a = parts[0], let b = parts[1], a >= min, b >= min else {
+            throw WindowToolError.invalidValue(name: name, expected: expected, got: value)
+        }
+        return (a, b)
+    }
+    let (cols, rows) = try pair("--grid", grid.lowercased(), separator: "x", min: 1, expected: "<cols>x<rows>, whole numbers greater than 0, such as 6x4")
+    guard let cell else {
+        throw WindowToolError.optionRequired(option: "--cell", command: "snap", placeholder: "<col>,<row> (from 0) when --grid is given")
+    }
+    let cellExpected = "<col>,<row> counting from 0 at the top left, col at most \(cols - 1) and row at most \(rows - 1) in the \(cols)x\(rows) grid"
+    let (col, row) = try pair("--cell", cell, separator: ",", min: 0, expected: cellExpected)
+    guard col < cols, row < rows else {
+        throw WindowToolError.invalidValue(name: "--cell", expected: cellExpected, got: cell)
+    }
+    guard let span else {
+        return SnapFractions(x: Double(col) / Double(cols), y: Double(row) / Double(rows), width: 1 / Double(cols), height: 1 / Double(rows))
+    }
+    let spanExpected = "<cols>,<rows> from 1,1 to \(cols - col),\(rows - row), so it fits inside the \(cols)x\(rows) grid from cell \(col),\(row)"
+    let (spanCols, spanRows) = try pair("--span", span, separator: ",", min: 1, expected: spanExpected)
+    // Subtract rather than add so a huge span cannot overflow.
+    guard spanCols <= cols - col, spanRows <= rows - row else {
+        throw WindowToolError.invalidValue(name: "--span", expected: spanExpected, got: span)
+    }
+    return SnapFractions(x: Double(col) / Double(cols), y: Double(row) / Double(rows),
+                         width: Double(spanCols) / Double(cols), height: Double(spanRows) / Double(rows))
+}
+
+/// Snaps a window to a named screen region, or to `rect` (fractions of the visible frame, from --rect or --grid).
 func snapCommand(bundleId: String, selector: WindowSelector, position: SnapPosition?, rect: SnapFractions? = nil) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
     let bounds = screenBoundsForWindow(window)
@@ -1934,8 +1980,15 @@ func snapCommand(bundleId: String, selector: WindowSelector, position: SnapPosit
     let halfH = bounds.height / 2
 
     if let f = rect ?? position?.fractions {
-        moveWindow(window.element, x: bounds.x + bounds.width * f.x, y: bounds.y + bounds.height * f.y)
-        resizeWindow(window.element, width: bounds.width * f.width, height: bounds.height * f.height)
+        // Round the edges, not the origin and size, so adjacent regions share an edge with no gap.
+        // Snapping to 1/1024 first absorbs float error, so an edge computed as x+width rounds like the same edge computed as x.
+        func edge(_ v: Double) -> Double { ((v * 1024).rounded() / 1024).rounded() }
+        let left = edge(bounds.x + bounds.width * f.x)
+        let right = edge(bounds.x + bounds.width * (f.x + f.width))
+        let top = edge(bounds.y + bounds.height * f.y)
+        let bottom = edge(bounds.y + bounds.height * (f.y + f.height))
+        moveWindow(window.element, x: left, y: top)
+        resizeWindow(window.element, width: right - left, height: bottom - top)
         return
     }
     guard let position else { throw WindowToolError.missingArguments(command: "snap") }
@@ -4016,10 +4069,13 @@ let commandSpecs: [CommandSpec] = [
                         ("--role <role>", "Only an element with exactly this role, such as AXButton"),
                         ("--title <title>", "Only an element with this whole title, ignoring case (unlike title=, not a substring); fails and lists the paths when several match"),
                         ("--action <action>", "The action to perform, as 'tree' lists it, such as AXShowMenu (default: AXPress)")]),
-    CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position> | <window> --rect=<x,y,w,h>",
+    CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position> | <window> --rect=<x,y,w,h> | <window> --grid=<cols>x<rows> --cell=<col>,<row> [--span=<cols>,<rows>]",
                 summary: "Snap a window to a screen region",
                 arguments: [("<position>", SnapPosition.allNames)],
-                flags: [("--rect <x,y,w,h>", "Snap to a region given as fractions of the visible frame (0 to 1, origin top left) instead of a position, e.g. --rect=0,0,0.7,1")]),
+                flags: [("--rect <x,y,w,h>", "Snap to a region given as fractions of the visible frame (0 to 1, origin top left) instead of a position or --grid, e.g. --rect=0,0,0.7,1"),
+                        ("--grid <cols>x<rows>", "Divide the visible frame into a grid and snap to --cell (required) instead of a position or --rect, e.g. --grid=6x4"),
+                        ("--cell <col>,<row>", "With --grid, the region's top-left cell, counting from 0 at the top left, e.g. --cell=1,0"),
+                        ("--span <cols>,<rows>", "With --grid, the region's size in cells (default: 1,1); it must fit inside the grid from --cell, e.g. --span=2,3")]),
     CommandSpec(name: "move", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <x> <y> [<width> <height>]",
                 summary: "Move a window, optionally resizing it",
                 arguments: [("<x> <y>", "Top-left corner in screen points"),
@@ -4472,11 +4528,16 @@ func runCommand(_ args: [String]) throws {
         let height = CGFloat(try parseDouble(values[1], label: "height"))
         try resizeCommand(bundleId: config.bundleId, selector: selector, width: width, height: height)
     case "snap":
-        let rect = try parseRectFlag(&rest)
-        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [rect == nil ? 1 : 0])
-        if let rect {
+        let fractionRect = try parseRectFlag(&rest)
+        let gridRect = try parseGridFlags(&rest)
+        if fractionRect != nil, gridRect != nil {
+            throw WindowToolError.unexpectedArgument("--rect", command: command, conflictsWith: "--grid")
+        }
+        let region = fractionRect ?? gridRect
+        let (selector, values) = try resolveSelectorAndArgs(rest, command: command, argCounts: [region == nil ? 1 : 0])
+        if let region {
             try checkArgs(values, command: command)
-            try snapCommand(bundleId: config.bundleId, selector: selector, position: nil, rect: rect)
+            try snapCommand(bundleId: config.bundleId, selector: selector, position: nil, rect: region)
         } else {
             guard let posStr = values.first else {
                 throw WindowToolError.missingArguments(command: "snap")
