@@ -2525,8 +2525,8 @@ func usage() {
       flash <window> [--color green] [--count 1]  Flash a colored overlay on a window
       focus <window>                           Bring window to front
       fullscreen <window>                      Enter macOS fullscreen mode
-      highlight <window> [--color C] [--duration S]  Briefly highlight a window (auto-dismisses)
-      identify [--color C] [--duration S]       Show window IDs on all windows (default: 3s)
+      highlight <window> [--color C] [--duration S]  Briefly highlight a window (blocks until it dismisses)
+      identify [--color C] [--duration S]       Show window IDs on all windows (blocks for 3s by default)
       info <window>                            Show detailed info for a window
       list                                     List windows (all apps, or one app with --app)
       maximize <window>                        Maximize window to fill screen

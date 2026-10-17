@@ -28,10 +28,10 @@ Draws a glowing border around the window for the specified duration, then remove
 ## Examples
 
 ```sh
-window-tool highlight 0
-window-tool highlight 0 --color blue --duration 5
-window-tool highlight title="Important" --color yellow
+window-tool --app Safari highlight 0
+window-tool --app Safari highlight 0 --color blue --duration 5
+window-tool --app Safari highlight title="Important" --color yellow
 
 # Chaining: highlight inherits the selector from snap
-window-tool snap 0 center + highlight --color red
+window-tool --app Safari snap 0 center + highlight --color red
 ```

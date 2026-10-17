@@ -5,7 +5,7 @@ Cascade all windows with a fixed offset between each.
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] stack [offset]
+window-tool [--app <name-or-id>] stack [offset]
 ```
 
 ## Arguments
@@ -21,6 +21,6 @@ Positions all windows in a cascade starting from the top-left of the screen, wit
 ## Examples
 
 ```sh
-window-tool stack
-window-tool stack 50
+window-tool --app Safari stack
+window-tool --app Safari stack 50
 ```

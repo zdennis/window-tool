@@ -23,11 +23,11 @@ For a sheet or dialog selected with `id=<N>`, there is no window index of its ow
 ## Examples
 
 ```sh
-window-tool info 0
+window-tool --app Safari info 0
 window-tool info id=1341
-window-tool info title="my-project"
-window-tool --json info 0
+window-tool --app Safari info title="my-project"
+window-tool --app Safari --json info 0
 
 # Chaining: info inherits the selector from focus
-window-tool focus 0 + info
+window-tool --app Safari focus 0 + info
 ```

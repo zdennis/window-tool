@@ -23,9 +23,9 @@ Use `unfullscreen` to exit fullscreen mode.
 ## Examples
 
 ```sh
-window-tool fullscreen 0
-window-tool fullscreen title="Safari"
+window-tool --app Safari fullscreen 0
+window-tool --app Safari fullscreen title="Safari"
 
 # Chaining: fullscreen inherits the selector from focus
-window-tool focus 0 + fullscreen
+window-tool --app Safari focus 0 + fullscreen
 ```

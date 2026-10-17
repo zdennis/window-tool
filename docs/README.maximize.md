@@ -23,9 +23,9 @@ This is not macOS fullscreen mode -- see `fullscreen` for that.
 ## Examples
 
 ```sh
-window-tool maximize 0
-window-tool maximize title="Terminal"
+window-tool --app Safari maximize 0
+window-tool --app Terminal maximize title="Terminal"
 
 # Chaining: maximize inherits the selector from focus
-window-tool focus 0 + maximize
+window-tool --app Safari focus 0 + maximize
 ```

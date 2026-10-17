@@ -27,10 +27,10 @@ Captures the window contents using ScreenCaptureKit and saves as PNG. Requires S
 ## Examples
 
 ```sh
-window-tool preview 0
-window-tool preview 0 --output ~/screenshot.png
-window-tool --json preview title="Browser"
+window-tool --app Safari preview 0
+window-tool --app Safari preview 0 --output ~/screenshot.png
+window-tool --app Safari --json preview title="Browser"
 
 # Chaining: preview inherits the selector from focus
-window-tool focus 0 + preview --output ~/screenshot.png
+window-tool --app Safari focus 0 + preview --output ~/screenshot.png
 ```

@@ -22,9 +22,9 @@ Moves the window to the top-left of the visible area on the target screen. Use `
 ## Examples
 
 ```sh
-window-tool move-to-screen 0 1
-window-tool move-to-screen title="Terminal" 0
+window-tool --app Safari move-to-screen 0 1
+window-tool --app Terminal move-to-screen title="Terminal" 0
 
 # Chaining: move-to-screen inherits the selector from focus
-window-tool focus 0 + move-to-screen 1
+window-tool --app Safari focus 0 + move-to-screen 1
 ```

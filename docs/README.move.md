@@ -25,12 +25,12 @@ If width and height are omitted, only the position changes. If provided, the win
 ## Examples
 
 ```sh
-window-tool move 0 100 50
-window-tool move 0 100 50 1200 900
-window-tool move title="my-notes" 0 0 1400 1000
+window-tool --app Safari move 0 100 50
+window-tool --app Safari move 0 100 50 1200 900
+window-tool --app Notes move title="my-notes" 0 0 1400 1000
 window-tool move id=1341 100 50
 
 # Chaining: move inherits the selector from focus
-window-tool focus 0 + move 100 50
-window-tool focus 0 + move 100 50 1200 900
+window-tool --app Safari focus 0 + move 100 50
+window-tool --app Safari focus 0 + move 100 50 1200 900
 ```

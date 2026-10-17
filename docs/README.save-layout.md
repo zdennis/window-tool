@@ -5,7 +5,7 @@ Save the current window layout for an application to a JSON file.
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] save-layout <file>
+window-tool [--app <name-or-id>] save-layout <file>
 ```
 
 ## Arguments
@@ -23,6 +23,6 @@ The JSON format includes the bundle ID and an array of window snapshots, making 
 ## Examples
 
 ```sh
-window-tool save-layout ~/layouts/iterm.json
+window-tool --app iTerm save-layout ~/layouts/iterm.json
 window-tool --app com.apple.Safari save-layout ~/layouts/safari.json
 ```

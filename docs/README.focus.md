@@ -21,10 +21,10 @@ Activates the application and raises the specified window to the front.
 ## Examples
 
 ```sh
-window-tool focus 0
+window-tool --app Safari focus 0
 window-tool focus id=1341
-window-tool focus title="my-project"
+window-tool --app Safari focus title="my-project"
 
 # Chaining: focus inherits the selector from snap
-window-tool snap 0 center + focus
+window-tool --app Safari snap 0 center + focus
 ```

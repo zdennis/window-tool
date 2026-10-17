@@ -28,10 +28,10 @@ Displays a translucent colored overlay on the window that fades out. Useful for 
 ## Examples
 
 ```sh
-window-tool flash 0
-window-tool flash 0 --color red --count 3
-window-tool flash title="Alert" --color yellow
+window-tool --app Safari flash 0
+window-tool --app Safari flash 0 --color red --count 3
+window-tool --app Safari flash title="Alert" --color yellow
 
 # Chaining: flash inherits the selector from focus
-window-tool focus 0 + flash --color green
+window-tool --app Safari focus 0 + flash --color green
 ```

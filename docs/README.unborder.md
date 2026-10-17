@@ -22,9 +22,9 @@ Without a window selector, removes all borders on windows owned by the target ap
 
 ```sh
 window-tool --app Safari unborder
-window-tool unborder 0
+window-tool --app Safari unborder 0
 window-tool unborder id=1341
 
 # Chaining: unborder inherits the selector from the previous command
-window-tool focus 0 + unborder
+window-tool --app Safari focus 0 + unborder
 ```

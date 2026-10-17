@@ -5,7 +5,7 @@ Print the number of windows for an application.
 ## Usage
 
 ```sh
-window-tool --app <name-or-bundle-id> count
+window-tool --app <name-or-id> count
 ```
 
 ## Details

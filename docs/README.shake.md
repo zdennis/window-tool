@@ -24,13 +24,13 @@ Rapidly moves the window left and right to draw attention to it, then returns it
 ## Examples
 
 ```sh
-window-tool shake 0
-window-tool shake 0 20 4 0.05
-window-tool shake title="Alert" 15
+window-tool --app Safari shake 0
+window-tool --app Safari shake 0 20 4 0.05
+window-tool --app Safari shake title="Alert" 15
 
 # Chaining: shake inherits the selector from focus
-window-tool focus 0 + shake
+window-tool --app Safari focus 0 + shake
 
 # Chaining: bare numbers are shake arguments, so this shakes window 0 by 20px
-window-tool focus 0 + shake 20
+window-tool --app Safari focus 0 + shake 20
 ```

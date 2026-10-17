@@ -35,10 +35,10 @@ Exits 1 with an error on stderr, prints no path, and deletes the partial output 
 ## Examples
 
 ```sh
-window-tool record 0 --output ~/recording.mov
-window-tool record 0 --output ~/clip.mp4 --duration 10 --fps 60
-window-tool record title="Demo" --output demo.mov --no-countdown --no-border
+window-tool --app Safari record 0 --output ~/recording.mov
+window-tool --app Safari record 0 --output ~/clip.mp4 --duration 10 --fps 60
+window-tool --app Safari record title="Demo" --output demo.mov --no-countdown --no-border
 
 # Chaining: record inherits the selector from focus
-window-tool focus 0 + record --output ~/recording.mov
+window-tool --app Safari focus 0 + record --output ~/recording.mov
 ```

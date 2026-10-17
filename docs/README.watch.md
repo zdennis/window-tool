@@ -5,7 +5,7 @@ Watch for window changes and print updates.
 ## Usage
 
 ```sh
-window-tool [--app <bundle-id>] watch [interval]
+window-tool [--app <name-or-id>] watch [interval]
 ```
 
 ## Arguments
@@ -23,7 +23,7 @@ Runs until interrupted with Ctrl-C.
 ## Examples
 
 ```sh
-window-tool watch
-window-tool watch 0.5
-window-tool --json watch 2
+window-tool --app Safari watch
+window-tool --app Safari watch 0.5
+window-tool --app Safari --json watch 2
 ```

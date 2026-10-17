@@ -30,10 +30,10 @@ Available positions: `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, 
 ## Examples
 
 ```sh
-window-tool snap 0 left
-window-tool snap 1 top-right
-window-tool snap title="Terminal" maximize
+window-tool --app Safari snap 0 left
+window-tool --app Safari snap 1 top-right
+window-tool --app Terminal snap title="Terminal" maximize
 
 # Chaining: snap inherits the selector from focus
-window-tool focus 0 + snap center
+window-tool --app Safari focus 0 + snap center
 ```

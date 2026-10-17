@@ -28,10 +28,10 @@ Creates a dark overlay across all screens with a cutout for the target window, d
 ## Examples
 
 ```sh
-window-tool dim 0
-window-tool dim 0 --opacity 0.7 --duration 10
-window-tool dim title="Important" --opacity 0.3
+window-tool --app Safari dim 0
+window-tool --app Safari dim 0 --opacity 0.7 --duration 10
+window-tool --app Safari dim title="Important" --opacity 0.3
 
 # Chaining: dim inherits the selector from focus
-window-tool focus 0 + dim --opacity 0.6
+window-tool --app Safari focus 0 + dim --opacity 0.6
 ```

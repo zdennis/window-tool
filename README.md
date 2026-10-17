@@ -23,15 +23,23 @@ Without this, commands that interact with windows (`list`, `move`, `focus`, etc.
 ./build.sh
 ```
 
-The compiled binary is placed in `bin/window-tool`.
+The compiled binary is placed in `bin/window-tool`. `bin/` is gitignored and not on your `PATH`; to run `window-tool` from anywhere, link it into a directory that is:
+
+```sh
+sudo ln -s "$PWD/bin/window-tool" /usr/local/bin/window-tool
+```
+
+If `/usr/local/bin` does not exist (common on Apple Silicon), use `ln -s "$PWD/bin/window-tool" /opt/homebrew/bin/window-tool` with Homebrew, or any directory already on your `PATH`. Rebuilding updates the linked binary in place.
 
 ## Usage
 
 ```
-window-tool [--app <bundle-id>] <command> [args...]
+window-tool [--app <name-or-id>] <command> [args...]
 ```
 
-Use `--app` to target a specific application by name or bundle ID. When using `id=` window selectors, `--app` is optional — the owning app is detected automatically.
+Use `--app` to target a specific application by name or bundle ID. `--app` is required whenever you select a window by index or `title=`; there is no frontmost-app default. With `id=<N>` selectors, `--app` is optional because the owning app is detected automatically.
+
+Window indexes change as windows open, close or minimize, so prefer `id=` in scripts (find IDs with `list`, `identify` or `pick`) and use `title=` or an index for interactive use.
 
 ### Commands
 
@@ -47,14 +55,15 @@ Use `--app` to target a specific application by name or bundle ID. When using `i
 | `flash` | [README](docs/README.flash.md) | Flash a colored overlay on a window |
 | `focus` | [README](docs/README.focus.md) | Bring a window to front |
 | `fullscreen` | [README](docs/README.fullscreen.md) | Enter macOS fullscreen mode |
-| `highlight` | [README](docs/README.highlight.md) | Briefly highlight a window with a border |
-| `identify` | [README](docs/README.identify.md) | Show window IDs on all windows |
+| `highlight` | [README](docs/README.highlight.md) | Briefly highlight a window with a border (blocks until it dismisses) |
+| `identify` | [README](docs/README.identify.md) | Show window IDs on all windows (blocks while shown) |
 | `info` | [README](docs/README.info.md) | Show detailed info for a window |
 | `list` | [README](docs/README.list.md) | List windows (all apps, or one app with --app) |
 | `maximize` | [README](docs/README.maximize.md) | Maximize a window to fill screen |
 | `minimize` | [README](docs/README.minimize.md) | Minimize a window |
 | `move` | [README](docs/README.move.md) | Move/resize a window |
 | `move-to-screen` | [README](docs/README.move-to-screen.md) | Move a window to a different display |
+| `pick` | [README](docs/README.pick.md) | Click a window to print its ID |
 | `preview` | [README](docs/README.preview.md) | Capture a window screenshot as PNG |
 | `record` | [README](docs/README.record.md) | Record video of a window |
 | `resize` | [README](docs/README.resize.md) | Resize a window |

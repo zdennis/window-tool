@@ -21,9 +21,9 @@ Minimizes the window to the dock. Use `restore` to unminimize all minimized wind
 ## Examples
 
 ```sh
-window-tool minimize 0
-window-tool minimize title="Notes"
+window-tool --app Safari minimize 0
+window-tool --app Notes minimize title="Notes"
 
 # Chaining: minimize inherits the selector from highlight
-window-tool highlight 0 + minimize
+window-tool --app Safari highlight 0 + minimize
 ```

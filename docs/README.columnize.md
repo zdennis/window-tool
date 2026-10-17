@@ -27,7 +27,7 @@ Arranges the specified windows in equal-width columns across the visible screen 
 ## Examples
 
 ```sh
-window-tool columnize 0 1
-window-tool columnize 0 1 2 --gap 20
+window-tool --app Safari columnize 0 1
+window-tool --app Safari columnize 0 1 2 --gap 20
 window-tool --app Safari columnize 0 1 2
 ```

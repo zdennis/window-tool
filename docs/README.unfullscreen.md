@@ -21,9 +21,9 @@ Exits native macOS fullscreen mode, returning the window to its previous size an
 ## Examples
 
 ```sh
-window-tool unfullscreen 0
-window-tool unfullscreen title="Safari"
+window-tool --app Safari unfullscreen 0
+window-tool --app Safari unfullscreen title="Safari"
 
 # Chaining: unfullscreen inherits the selector from a previous command
-window-tool focus 0 + unfullscreen
+window-tool --app Safari focus 0 + unfullscreen
 ```

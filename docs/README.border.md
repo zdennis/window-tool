@@ -28,11 +28,11 @@ Runs as a background process that draws a border around the window and updates i
 ## Examples
 
 ```sh
-window-tool border 0
-window-tool border 0 --color red --width 5
-window-tool border title="Terminal" --color green
+window-tool --app Safari border 0
+window-tool --app Safari border 0 --color red --width 5
+window-tool --app Terminal border title="Terminal" --color green
 window-tool border id=1341
 
 # Chaining: border inherits the selector from focus
-window-tool focus 0 + border --color red
+window-tool --app Safari focus 0 + border --color red
 ```
