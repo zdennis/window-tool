@@ -363,8 +363,10 @@ func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePoin
 struct WindowInfo {
     /// The underlying AXUIElement handle for this window.
     let element: AXUIElement
-    /// The zero-based index of the window in the application's window list.
+    /// The zero-based index of the window in the application's window list, or -1 for a child (sheet, dialog) that has no index of its own.
     let id: Int
+    /// For a child window, the index of the parent window in the application's window list.
+    var parentIndex: Int? = nil
     /// The window's title (may be empty).
     let title: String
     /// The window's top-left screen position.
@@ -376,7 +378,7 @@ struct WindowInfo {
 }
 
 /// Builds a WindowInfo from an AXUIElement window, or returns nil if position/size can't be read.
-func makeWindowInfo(element: AXUIElement, id: Int) -> WindowInfo? {
+func makeWindowInfo(element: AXUIElement, id: Int, parentIndex: Int? = nil) -> WindowInfo? {
     var titleRef: CFTypeRef?
     AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef)
     let title = titleRef as? String ?? ""
@@ -395,7 +397,7 @@ func makeWindowInfo(element: AXUIElement, id: Int) -> WindowInfo? {
         AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
     }
 
-    return WindowInfo(element: element, id: id, title: title, position: position, size: size, windowID: getCGWindowID(element))
+    return WindowInfo(element: element, id: id, parentIndex: parentIndex, title: title, position: position, size: size, windowID: getCGWindowID(element))
 }
 
 /// Reads a window's current top-left frame, or returns nil once the window no longer exists.
@@ -604,7 +606,7 @@ func findChildWindow(windowID: CGWindowID, in windows: [WindowInfo]) -> WindowIn
             guard role == kAXWindowRole as String || role == kAXSheetRole as String
                   || role == "AXDialog" else { continue }
             if let childID = getCGWindowID(child), childID == windowID {
-                return makeWindowInfo(element: child, id: parentIndex)
+                return makeWindowInfo(element: child, id: -1, parentIndex: parentIndex)
             }
         }
     }
@@ -704,13 +706,14 @@ func printWindowInfo(_ w: WindowInfo, bundleId: String? = nil) {
 
     if config.jsonOutput {
         var dict: [String: Any] = [
-            "index": w.id, "title": w.title,
+            "title": w.title,
             "x": Int(w.position.x), "y": Int(w.position.y),
             "width": Int(w.size.width), "height": Int(w.size.height),
             "minimized": minimized, "fullscreen": fullscreen,
             "focused": focused, "main": main, "modal": modal
         ]
         if let bundleId = bundleId { dict["bundle_id"] = bundleId }
+        if let parent = w.parentIndex { dict["parent_index"] = parent } else { dict["index"] = w.id }
         if let wid = w.windowID { dict["window_id"] = Int(wid) }
         if let role = role { dict["role"] = role }
         if let subrole = subrole { dict["subrole"] = subrole }
@@ -718,7 +721,7 @@ func printWindowInfo(_ w: WindowInfo, bundleId: String? = nil) {
         printJSON(dict)
     } else {
         if let bundleId = bundleId { print("bundle_id:\t\(bundleId)") }
-        print("index:\t\(w.id)")
+        if let parent = w.parentIndex { print("parent_index:\t\(parent)") } else { print("index:\t\(w.id)") }
         if let wid = w.windowID { print("window_id:\t\(wid)") }
         print("title:\t\(w.title)")
         print("position:\t\(Int(w.position.x)),\(Int(w.position.y))")

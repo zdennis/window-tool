@@ -16,7 +16,9 @@ window-tool [--app <name-or-id>] info <window>
 
 ## Details
 
-Prints tab-separated key-value pairs: index, window_id, title, position, size, role, subrole, focused, main, minimized, fullscreen, modal, and document (if available). With `--json`, outputs a JSON object.
+Prints tab-separated key-value pairs: index (or `parent_index` for sheets and dialogs), window_id, title, position, size, role, subrole, focused, main, minimized, fullscreen, modal, and document (if available). With `--json`, outputs a JSON object.
+
+For a sheet or dialog selected with `id=<N>`, there is no window index of its own, so `index` is omitted and `parent_index` (the index of the window it belongs to, not the sheet's own) is printed instead. In scripts, read `.index // .parent_index`.
 
 ## Examples
 
