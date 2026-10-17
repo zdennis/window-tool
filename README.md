@@ -78,7 +78,7 @@ Use `--app` to target a specific application by name or bundle ID. When using `i
 
 | Option | Description |
 |--------|-------------|
-| `--app <name-or-id>` | Target application by name or bundle ID |
+| `--app <name-or-id>` | Target application by name or bundle ID; an exact app name (case-insensitive) wins over substring matches |
 | `--json` | Output in JSON format. Status messages (such as `Moved 2 window(s)…`) go to stderr so stdout stays valid JSON |
 | `--version`, `-v` | Print version and exit |
 

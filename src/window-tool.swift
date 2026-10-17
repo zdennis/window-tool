@@ -293,7 +293,8 @@ struct TileWindowSnapshot: Codable {
 
 /// Resolves an app identifier to a bundle ID.
 /// If the identifier contains a dot, it's treated as an exact bundle ID.
-/// Otherwise, it's matched case-insensitively against app names and bundle IDs of running apps.
+/// Otherwise, an exact case-insensitive app name wins; failing that, it's matched
+/// case-insensitively as a substring of app names and bundle IDs of running apps.
 func resolveAppIdentifier(_ identifier: String) throws -> String {
     let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
 
@@ -313,6 +314,10 @@ func resolveAppIdentifier(_ identifier: String) throws -> String {
         if name.lowercased().contains(query) || bundleId.lowercased().contains(query) {
             matches.append((name: name, bundleId: bundleId))
         }
+    }
+    let exactMatches = matches.filter { $0.name.lowercased() == query }
+    if exactMatches.count == 1 {
+        return exactMatches[0].bundleId
     }
     if matches.count == 1 {
         return matches[0].bundleId
