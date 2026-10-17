@@ -91,6 +91,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `unborder-all` | [README](docs/README.unborder-all.md) | Remove all active borders |
 | `undim` | [README](docs/README.undim.md) | Remove active dim overlay |
 | `unfullscreen` | [README](docs/README.unfullscreen.md) | Exit macOS fullscreen mode |
+| `wait` | [README](docs/README.wait.md) | Block until a window exists or is gone; exit 7 on timeout |
 | `watch` | [README](docs/README.watch.md) | Watch for window changes |
 
 ### Options
@@ -169,6 +170,7 @@ $ window-tool --json --app Finder info 99
 | 4 | Window not found | `window_index_out_of_range`, `no_window_matching_title`, `ambiguous_window_title`, `no_window_matching_id`, `no_windows`, `no_pickable_window` |
 | 5 | Permission not granted | `accessibility_not_enabled`, `screen_recording_not_enabled` |
 | 6 | `close` was blocked by an unsaved-changes prompt | `unsaved_changes` |
+| 7 | `wait` timed out | `timeout` |
 
 New error codes may be added; match on the exit code for the category and on `code` for the specific case.
 

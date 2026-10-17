@@ -96,6 +96,8 @@ enum WindowToolError: LocalizedError {
     case noPickableWindow
     /// A window answered the close with a sheet (such as "Do you want to save changes?") instead of closing.
     case unsavedChanges(windows: [(windowID: CGWindowID?, title: String)])
+    /// `wait` ran out of time; `what` finishes the sentence "Timed out after Ns waiting for ...".
+    case timedOut(what: String, seconds: Double)
     case accessibilityNotEnabled
     case screenRecordingNotEnabled
     case invalidValue(name: String, expected: String, got: String)
@@ -140,6 +142,8 @@ enum WindowToolError: LocalizedError {
             return "No pickable window at click location (menu bar, Dock and status items are skipped)"
         case .unsavedChanges(let windows):
             return "Not closed, the window is asking about unsaved changes: \(windows.map { "'\($0.title)'" }.joined(separator: ", ")). Answer the prompt in the app, then run close again."
+        case .timedOut(let what, let seconds):
+            return "Timed out after \(formatSeconds(seconds)) waiting for \(what)"
         case .accessibilityNotEnabled:
             return "Accessibility access is not enabled.\nGrant access in System Settings > Privacy & Security > Accessibility.\nAdd this terminal app or the window-tool binary."
         case .screenRecordingNotEnabled:
@@ -192,6 +196,7 @@ enum WindowToolError: LocalizedError {
         case .noWindows: return "no_windows"
         case .noPickableWindow: return "no_pickable_window"
         case .unsavedChanges: return "unsaved_changes"
+        case .timedOut: return "timeout"
         case .accessibilityNotEnabled: return "accessibility_not_enabled"
         case .screenRecordingNotEnabled: return "screen_recording_not_enabled"
         case .invalidValue: return "invalid_value"
@@ -237,6 +242,8 @@ enum WindowToolError: LocalizedError {
             return ["command": command]
         case .fileNotFound(let path):
             return ["path": path]
+        case .timedOut(let what, let seconds):
+            return ["waiting_for": what, "timeout": seconds]
         case .unsavedChanges(let windows):
             return ["windows": windows.map { ["window_id": $0.windowID.map { Int($0) } ?? NSNull(), "title": $0.title] as [String: Any] }]
         case .unknownOption(let option, let command), .repeatedOption(let option, let command), .optionTakesNoValue(let option, let command):
@@ -252,7 +259,7 @@ enum WindowToolError: LocalizedError {
         }
     }
 
-    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 6 unsaved changes blocked a close, 1 anything else.
+    /// 2 usage, 3 app not found, 4 window not found, 5 permission denied, 6 unsaved changes blocked a close, 7 a wait timed out, 1 anything else.
     var exitCode: Int32 {
         switch self {
         case .invalidValue, .unknownChoice, .optionRequired, .appRequired, .missingWindowSelector, .unknownOption,
@@ -267,6 +274,8 @@ enum WindowToolError: LocalizedError {
             return 5
         case .unsavedChanges:
             return 6
+        case .timedOut:
+            return 7
         case .nothingToUndo, .fileNotFound, .operationFailed:
             return 1
         }
@@ -325,6 +334,11 @@ func parsePositiveDouble(_ s: String, label: String) throws -> Double {
         throw WindowToolError.invalidValue(name: label, expected: "a number greater than 0", got: s)
     }
     return v
+}
+
+/// A duration for messages: whole seconds without a decimal point (`10s`), otherwise as given (`0.5s`).
+func formatSeconds(_ seconds: Double) -> String {
+    seconds == seconds.rounded() ? "\(Int(seconds))s" : "\(seconds)s"
 }
 
 /// Removes the first `--name value` or `--name=value` from `args` and returns the value, or nil when absent.
@@ -2100,6 +2114,67 @@ func infoCommand(bundleId: String, selector: WindowSelector) throws {
     printWindowInfo(w)
 }
 
+// MARK: - Wait Command
+
+/// Polls until the selected window exists (or with `gone`, no longer exists), and with `stable` has kept the same
+/// frame for that long. Prints the matched window and throws `timedOut` after `timeout` seconds. The app may not be
+/// running yet, so `--app` is resolved on every poll; `title=` waits for any match, as with `--first`.
+func waitCommand(selector: WindowSelector, gone: Bool, stable: Double?, timeout: Double) throws {
+    let target: String
+    switch selector {
+    case .byIndex(let index): target = "window \(index)"
+    case .byTitle(let pattern): target = "a window titled '\(pattern)'"
+    case .byWindowID(let windowID): target = "window id=\(windowID)"
+    }
+    func find() throws -> WindowInfo? {
+        let savedFirstMatch = config.firstMatch
+        config.firstMatch = true
+        defer { config.firstMatch = savedFirstMatch }
+        do {
+            let bundleId = config.bundleId.isEmpty ? "" : try resolveAppIdentifier(config.bundleId)
+            return try resolveWindow(bundleId: bundleId, selector: selector)
+        } catch WindowToolError.appNotFound, WindowToolError.noWindowMatchingID, WindowToolError.noWindowMatchingTitle,
+                WindowToolError.windowIndexOutOfRange {
+            return nil
+        }
+    }
+    func frame(_ w: WindowInfo) -> [Int] {
+        [roundedInt(w.position.x), roundedInt(w.position.y), roundedInt(w.size.width), roundedInt(w.size.height)]
+    }
+
+    let deadline = Date().addingTimeInterval(timeout)
+    var lastFrame: [Int]?
+    var stableSince = Date()
+    while true {
+        let window = try find()
+        if gone {
+            if window == nil {
+                if config.jsonOutput { printJSON(["gone": true] as [String: Any]) } else { print("Gone: \(target)") }
+                return
+            }
+        } else if let window {
+            if frame(window) != lastFrame {
+                lastFrame = frame(window)
+                stableSince = Date()
+            }
+            if Date().timeIntervalSince(stableSince) >= (stable ?? 0) {
+                var pid: pid_t = 0
+                AXUIElementGetPid(window.element, &pid)
+                printWindowInfo(window, bundleId: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
+                return
+            }
+        } else {
+            lastFrame = nil
+        }
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else {
+            let what = gone ? "\(target) to go" : stable == nil ? "\(target) to exist" : "\(target) to stop moving and resizing"
+            throw WindowToolError.timedOut(what: what, seconds: timeout)
+        }
+        Thread.sleep(forTimeInterval: min(0.1, remaining))
+    }
+}
+
 // MARK: - Preview Command
 
 func captureWindowImage(windowID: CGWindowID) throws -> CGImage {
@@ -3069,6 +3144,13 @@ let commandSpecs: [CommandSpec] = [
                 arguments: [("[interval]", "Legacy form of --interval")],
                 flags: [("--interval <seconds>", "Poll interval, greater than 0 (default: 1.0)")]),
 
+    CommandSpec(name: "wait", group: .query, app: .optional, mutates: false, synopsis: "<window>",
+                summary: "Block until a window exists, or with --gone is gone; exit 7 on timeout",
+                flags: [("--gone", "Wait for the window to disappear instead of appear"),
+                        ("--stable <seconds>", "Also wait until the window's position and size have not changed for this long, greater than 0"),
+                        ("--timeout <seconds>", "Give up after this long, greater than 0 (default: 30)")],
+                resolvesOwnApp: true),
+
     CommandSpec(name: "snap", group: .moveSize, app: .optional, mutates: true, synopsis: "<window> <position>",
                 summary: "Snap a window to a screen region",
                 arguments: [("<position>", SnapPosition.allNames)]),
@@ -3292,7 +3374,7 @@ func usage() {
       to stdout (in a chain, the failed command's "error"). Exit codes: 0 success,
       1 other failure, 2 usage error, 3 app not found or ambiguous, 4 window not
       found, 5 permission not granted (Accessibility, or Screen Recording for record),
-      6 close blocked by an unsaved-changes prompt.
+      6 close blocked by an unsaved-changes prompt, 7 wait timed out.
 
     Warnings:
       After a move or resize, the window's frame is re-read. If a set call failed or
@@ -3549,6 +3631,15 @@ func runCommand(_ args: [String]) throws {
         }
         let selectors: [WindowSelector]? = rest.isEmpty ? nil : try rest.map { try parseWindowSelector($0) }
         try stackCommand(bundleId: config.bundleId, selectors: selectors, offsetStep: offset ?? 30)
+    case "wait":
+        let gone = takeFlag("--gone", from: &rest)
+        let stableArg = try takeOption("--stable", from: &rest)
+        let timeout = try takeOption("--timeout", from: &rest).map { try parsePositiveDouble($0, label: "timeout") } ?? 30
+        let stable = try stableArg.map { try parsePositiveDouble($0, label: "stable") }
+        if gone, let stableArg {
+            throw WindowToolError.invalidValue(name: "--stable", expected: "left out when --gone is given (a window that is gone has no frame)", got: stableArg)
+        }
+        try waitCommand(selector: try resolveSelectorAndArgs(rest, command: command).selector, gone: gone, stable: stable, timeout: timeout)
     case "watch":
         let namedInterval = try takeOption("--interval", from: &rest)
         let positionalInterval = try checkArgs(rest, command: command, max: namedInterval == nil ? 1 : 0).first
