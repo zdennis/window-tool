@@ -60,7 +60,7 @@ Window indexes change as windows open, close or minimize, so prefer `id=` in scr
 | `columnize` | [README](docs/README.columnize.md) | Arrange windows side-by-side in columns |
 | `commands` | [README](docs/README.commands.md) | List every command; with `--json`, its arguments, options and whether it mutates |
 | `count` | [README](docs/README.count.md) | Print number of windows |
-| `dim` | [README](docs/README.dim.md) | Dim everything except a window |
+| `dim` | [README](docs/README.dim.md) | Dim everything except a window, tracking it until it closes |
 | `doctor` | [README](docs/README.doctor.md) | Report the version and whether Accessibility and Screen Recording are granted |
 | `flash` | [README](docs/README.flash.md) | Flash a colored overlay on a window |
 | `focus` | [README](docs/README.focus.md) | Bring a window to front |

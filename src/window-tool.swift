@@ -1696,12 +1696,7 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
 
-    let mainScreenHeight = NSScreen.screens[0].frame.height
-    let targetCocoaY = mainScreenHeight - window.position.y - window.size.height
-    let targetRect = NSRect(x: window.position.x, y: targetCocoaY,
-                            width: window.size.width, height: window.size.height)
-
-    var overlays: [NSWindow] = []
+    var overlays: [(window: NSWindow, view: DimOverlayView)] = []
 
     for screen in NSScreen.screens {
         let frame = screen.frame
@@ -1718,21 +1713,27 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
 
         let view = DimOverlayView(frame: NSRect(origin: .zero, size: frame.size))
         view.dimColor = NSColor.black.withAlphaComponent(opacity)
-
-        if frame.intersects(targetRect) {
-            let localRect = NSRect(
-                x: targetRect.origin.x - frame.origin.x,
-                y: targetRect.origin.y - frame.origin.y,
-                width: targetRect.width,
-                height: targetRect.height
-            )
-            view.cutoutRect = localRect
-        }
-
         overlay.contentView = view
-        overlay.orderFrontRegardless()
-        overlays.append(overlay)
+        overlays.append((overlay, view))
     }
+
+    // Moves the cutout to the window's current AX frame on every screen it overlaps.
+    let mainScreenHeight = NSScreen.screens[0].frame.height
+    func cutOut(_ windowFrame: CGRect) {
+        let target = NSRect(x: windowFrame.origin.x, y: mainScreenHeight - windowFrame.maxY,
+                            width: windowFrame.width, height: windowFrame.height)
+        for (overlay, view) in overlays {
+            let frame = overlay.frame
+            let cutout = frame.intersects(target) ? target.offsetBy(dx: -frame.origin.x, dy: -frame.origin.y) : nil
+            if view.cutoutRect != cutout {
+                view.cutoutRect = cutout
+                view.needsDisplay = true
+            }
+        }
+    }
+
+    cutOut(CGRect(origin: window.position, size: window.size))
+    for (overlay, _) in overlays { overlay.orderFrontRegardless() }
 
     try "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: dimPIDFile, atomically: true, encoding: .utf8)
 
@@ -1743,18 +1744,30 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
     signal(SIGTERM, cleanupPID)
     signal(SIGINT, cleanupPID)
 
-    if duration > 0 {
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-            for overlay in overlays { overlay.close() }
-            removePIDFileIfOwned(dimPIDFile)
-            app.stop(nil)
-            let dummyEvent = NSEvent.otherEvent(with: .applicationDefined,
-                                                location: .zero, modifierFlags: [],
-                                                timestamp: 0, windowNumber: 0,
-                                                context: nil, subtype: 0,
-                                                data1: 0, data2: 0)!
-            app.postEvent(dummyEvent, atStart: true)
+    func dismiss() {
+        for (overlay, _) in overlays { overlay.close() }
+        removePIDFileIfOwned(dimPIDFile)
+        app.stop(nil)
+        let dummyEvent = NSEvent.otherEvent(with: .applicationDefined,
+                                            location: .zero, modifierFlags: [],
+                                            timestamp: 0, windowNumber: 0,
+                                            context: nil, subtype: 0,
+                                            data1: 0, data2: 0)!
+        app.postEvent(dummyEvent, atStart: true)
+    }
+
+    // Follow the window like border does; once it closes there is nothing left to dim around.
+    Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+        guard let frame = currentFrame(of: window.element) else {
+            timer.invalidate()
+            dismiss()
+            return
         }
+        cutOut(frame)
+    }
+
+    if duration > 0 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { dismiss() }
     }
 
     app.run()
@@ -4418,9 +4431,9 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "unborder-all", group: .overlays, app: .none, mutates: false,
                 summary: "Remove all active borders", needsAccessibility: false),
     CommandSpec(name: "dim", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
-                summary: "Dim everything except a window",
+                summary: "Dim everything except a window, tracking it until it closes",
                 flags: [("--opacity <value>", "Overlay opacity, 0.0-1.0 (default: 0.5)"),
-                        ("--duration <seconds>", "Dismiss after this long, up to 86400; 0 stays until 'undim' (default: 0)")]),
+                        ("--duration <seconds>", "Dismiss after this long, up to 86400; 0 stays until 'undim' or the window closes (default: 0)")]),
     CommandSpec(name: "undim", group: .overlays, app: .none, mutates: false,
                 summary: "Remove the active dim overlay", needsAccessibility: false),
     CommandSpec(name: "identify", group: .overlays, app: .optional, mutates: false,

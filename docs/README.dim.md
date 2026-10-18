@@ -19,11 +19,11 @@ window-tool [--app <name-or-id>] dim <window> [--opacity <value>] [--duration <s
 | Option | Description |
 |--------|-------------|
 | `--opacity <value>` | Dim overlay opacity, 0.0-1.0 (default: 0.5) |
-| `--duration <seconds>` | Auto-dismiss after this many seconds, up to 86400; 0 means stay until `undim` (default: 0) |
+| `--duration <seconds>` | Auto-dismiss after this many seconds, up to 86400; 0 means stay until `undim` or the window closes (default: 0) |
 
 ## Details
 
-Creates a dark overlay across all screens with a cutout for the target window, drawing focus to it. Only one dim overlay can be active at a time; starting a new one replaces the previous. Use `undim` to remove it, or set `--duration` for auto-dismiss.
+Creates a dark overlay across all screens with a cutout for the target window, drawing focus to it. Runs as a background process; the cutout follows the window as it moves or resizes, and the process exits when the window closes. Only one dim overlay can be active at a time; starting a new one replaces the previous. Use `undim` to remove it, or set `--duration` for auto-dismiss.
 
 ## Examples
 
