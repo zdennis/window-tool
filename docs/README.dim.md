@@ -23,7 +23,7 @@ window-tool [--app <name-or-id>] dim <window> [--opacity <value>] [--duration <s
 
 ## Details
 
-Creates a dark overlay across all screens with a cutout for the target window, drawing focus to it. Runs as a background process; the cutout follows the window as it moves or resizes, and the process exits when the window closes. Only one dim overlay can be active at a time; starting a new one replaces the previous. Use `undim` to remove it, or set `--duration` for auto-dismiss.
+Creates a dark overlay across all screens with a cutout for the target window, drawing focus to it. Runs as a background process; the cutout follows the window as it moves or resizes, and the process exits when the window closes. The dim shows only while the window is active (the main window of the frontmost app): it hides when you switch to another window or app and comes back when you return, so dimming a background window shows nothing until it is brought forward. Only one dim overlay can be active at a time; starting a new one replaces the previous. Use `undim` to remove it, or set `--duration` for auto-dismiss.
 
 ## Examples
 

@@ -1732,8 +1732,21 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
         }
     }
 
+    // Shows the dim only while the window is active: the main window of the frontmost app.
+    var windowPID: pid_t = 0
+    guard AXUIElementGetPid(window.element, &windowPID) == .success else {
+        throw WindowToolError.operationFailed("Could not read the window's process")
+    }
+    func showIfActive() {
+        let active = NSWorkspace.shared.frontmostApplication?.processIdentifier == windowPID
+            && axBool(window.element, kAXMainAttribute as String)
+        for (overlay, _) in overlays where overlay.isVisible != active {
+            if active { overlay.orderFrontRegardless() } else { overlay.orderOut(nil) }
+        }
+    }
+
     cutOut(CGRect(origin: window.position, size: window.size))
-    for (overlay, _) in overlays { overlay.orderFrontRegardless() }
+    showIfActive()
 
     try "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: dimPIDFile, atomically: true, encoding: .utf8)
 
@@ -1764,6 +1777,7 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
             return
         }
         cutOut(frame)
+        showIfActive()
     }
 
     if duration > 0 {
@@ -4431,7 +4445,7 @@ let commandSpecs: [CommandSpec] = [
     CommandSpec(name: "unborder-all", group: .overlays, app: .none, mutates: false,
                 summary: "Remove all active borders", needsAccessibility: false),
     CommandSpec(name: "dim", group: .overlays, app: .optional, mutates: false, synopsis: "<window>",
-                summary: "Dim everything except a window, tracking it until it closes",
+                summary: "Dim everything except a window while it is active",
                 flags: [("--opacity <value>", "Overlay opacity, 0.0-1.0 (default: 0.5)"),
                         ("--duration <seconds>", "Dismiss after this long, up to 86400; 0 stays until 'undim' or the window closes (default: 0)")]),
     CommandSpec(name: "undim", group: .overlays, app: .none, mutates: false,
