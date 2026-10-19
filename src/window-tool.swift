@@ -1769,16 +1769,21 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
         app.postEvent(dummyEvent, atStart: true)
     }
 
-    // Follow the window like border does; once it closes there is nothing left to dim around.
-    Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+    // Follow the window at display rate; faster gains nothing since overlays redraw at refresh.
+    // A busy app can fail one AX read, so only dismiss once the window is really gone.
+    let followTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { timer in
         guard let frame = currentFrame(of: window.element) else {
-            timer.invalidate()
-            dismiss()
+            var role: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window.element, kAXRoleAttribute as CFString, &role) == .invalidUIElement {
+                timer.invalidate()
+                dismiss()
+            }
             return
         }
         cutOut(frame)
         showIfActive()
     }
+    followTimer.tolerance = 0.004
 
     if duration > 0 {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { dismiss() }
