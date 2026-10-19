@@ -754,6 +754,28 @@ func currentFrame(of element: AXUIElement) -> CGRect? {
     return CGRect(origin: position, size: size)
 }
 
+/// True once a window's AX element or its process no longer exists. A nil `currentFrame` alone can be a busy
+/// app failing one read; a quit or crashed app answers `.cannotComplete`, so check the process is still alive.
+func windowIsGone(_ element: AXUIElement) -> Bool {
+    var role: CFTypeRef?
+    switch AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) {
+    case .invalidUIElement:
+        return true
+    case .cannotComplete:
+        var pid: pid_t = 0
+        return AXUIElementGetPid(element, &pid) != .success || (kill(pid, 0) != 0 && errno == ESRCH)
+    default:
+        return false
+    }
+}
+
+/// Overlays that follow a window poll it constantly, so a hung app must not stall their run loop for AX's ~6s default.
+let overlayAXTimeout: Float = 0.25
+
+/// How often border and dim re-read their window's frame: display rate, since the overlays only redraw at refresh.
+let overlayFollowInterval = 1.0 / 60
+let overlayFollowTolerance = 0.004
+
 /// Retrieves all windows for the given application element.
 /// Each window is returned as a `WindowInfo` with its index, title, position, and size.
 func getWindows(appElement: AXUIElement) -> [WindowInfo] {
@@ -1690,6 +1712,7 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
     }
 
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    AXUIElementSetMessagingTimeout(window.element, overlayAXTimeout)
 
     killExistingDim()
 
@@ -1769,12 +1792,10 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
         app.postEvent(dummyEvent, atStart: true)
     }
 
-    // Follow the window at display rate; faster gains nothing since overlays redraw at refresh.
-    // A busy app can fail one AX read, so only dismiss once the window is really gone.
-    let followTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { timer in
+    // Follow the window; once it closes there is nothing left to dim around.
+    let followTimer = Timer.scheduledTimer(withTimeInterval: overlayFollowInterval, repeats: true) { timer in
         guard let frame = currentFrame(of: window.element) else {
-            var role: CFTypeRef?
-            if AXUIElementCopyAttributeValue(window.element, kAXRoleAttribute as CFString, &role) == .invalidUIElement {
+            if windowIsGone(window.element) {
                 timer.invalidate()
                 dismiss()
             }
@@ -1783,7 +1804,7 @@ func dimCommand(bundleId: String, selector: WindowSelector, opacity: Double, dur
         cutOut(frame)
         showIfActive()
     }
-    followTimer.tolerance = 0.004
+    followTimer.tolerance = overlayFollowTolerance
 
     if duration > 0 {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { dismiss() }
@@ -1829,6 +1850,7 @@ func borderOwnerDir(for window: WindowInfo) -> String {
 
 func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, width: CGFloat) throws {
     let window = try resolveWindow(bundleId: bundleId, selector: selector)
+    AXUIElementSetMessagingTimeout(window.element, overlayAXTimeout)
     guard let windowID = window.windowID else {
         throw WindowToolError.operationFailed("Could not determine window ID")
     }
@@ -1887,10 +1909,12 @@ func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, w
     intSource.setEventHandler { cleanupAndExit() }
     intSource.resume()
 
-    Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+    let followTimer = Timer.scheduledTimer(withTimeInterval: overlayFollowInterval, repeats: true) { timer in
         guard let frame = currentFrame(of: window.element) else {
-            timer.invalidate()
-            cleanupAndExit()
+            if windowIsGone(window.element) {
+                timer.invalidate()
+                cleanupAndExit()
+            }
             return
         }
 
@@ -1904,6 +1928,7 @@ func borderCommand(bundleId: String, selector: WindowSelector, color: NSColor, w
             view.needsDisplay = true
         }
     }
+    followTimer.tolerance = overlayFollowTolerance
 
     app.run()
     removePIDFileIfOwned(pidFile)
