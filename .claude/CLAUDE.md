@@ -1,22 +1,61 @@
-# window-tool
+# CLAUDE.md
 
-A macOS CLI for fast window management using the Accessibility API (`AXUIElement`). Written in Swift.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A macOS CLI for fast window management using the Accessibility API (`AXUIElement`). Written as a single-file Swift program. Designed for both human and machine (AI agent, scripting) use.
 
 See [README.md](../README.md) for full usage, commands, and examples.
 
 ## Project structure
 
 - `src/window-tool.swift` — Single-file Swift source
-- `bin/` — Project executables (compiled binary)
-- `script/` — Dev tooling (feature requests, etc.)
-- `build.sh` — Compiles the binary to `bin/window-tool`
+- `bin/window-tool` — Compiled binary (gitignored)
+- `build.sh` — Compiles with `swiftc -O` linking Cocoa and ScreenCaptureKit frameworks
 - `release.sh` — Tags and pushes semver releases
+- `docs/README.<command>.md` — Per-command documentation
+- `script/` — Dev tooling (feature requests management)
+- `.claude/agents/` — Review agent definitions
+- `.claude/skills/` — Claude Code skills (`/release`, `/readme`)
 
 ## Development workflow
 
 1. Edit `src/window-tool.swift`
 2. Run `./build.sh` to compile
 3. Test with `./bin/window-tool <command>`
+
+## Source architecture
+
+The source is organized into `// MARK:` sections in this order (`grep -n 'MARK' src/window-tool.swift` lists them):
+
+1. **Configuration** — `Config` struct (bundleId, flags, chaining state), `printJSON`/`flushJSONBuffer`
+2. **Errors** — `WindowToolError` enum with `LocalizedError` conformance
+3. **Argument Parsing Helpers** — `parseInt`, `parseDouble`, flag parsers for each command's options
+4. **Color Parsing** — `parseColor`, flag parsers for highlight/border/flash/dim
+5. **Undo History** — `Codable` window frames for `undo`, saved under `NSTemporaryDirectory()`
+6. **Accessibility Helpers** — `resolveAppIdentifier` (fuzzy app matching), `getAppElement`, `getCGWindowID` (private API via `@_silgen_name`), `WindowInfo` struct, `getWindows`, `moveWindow`, `resizeWindow`
+7. **Window Resolution** — `WindowSelector` enum (`.byIndex`, `.byTitle`, `.byWindowID`), `parseWindowSelector`, `resolveSelectorAndArgs` (inherits `Config.lastSelector` when chaining), `resolveWindow`, `findWindowByID` (cross-app CGWindowList lookup)
+8. **Screen Helpers** — `screensCommand`, `activeScreenCommand`, `activeWindowCommand`, `shellInitCommand`, coordinate conversion helpers
+9. **Accessibility Check** — `checkAccessibility` via `AXIsProcessTrusted()`
+10. **Commands** — Core window operations (list, info, move, resize, snap, focus, etc.)
+11. **Highlight Overlay**, **Overlay PID Files**, **Dim Overlay**, **Border Overlay** — `NSWindow` overlays run under `NSApplication.run()`; PID files let a later call remove a running dim/border
+12. **Element Paths**, **Text Command**, **Press Command** — Accessibility element tree addressing (`0.2.1` paths) and the commands that read or press elements
+13. **Wait Command** — Polls until a window appears, disappears, or stabilizes
+14. **Preview Command**, **Record Command**, **Pip Command** — Screenshot via ScreenCaptureKit, video recording with AVAssetWriter, picture-in-picture
+15. **Identify Command**, **Pick Command** — Visual window identification overlays, click-to-select
+16. **Layout Types** — save-layout/restore-layout (stored in `~/.config/window-tool/layouts`), plus stack, watch, columnize
+17. **Command Metadata** — `CommandSpec` table that drives `help` and `commands --json`; every new command needs an entry
+18. **Main** — Argument parsing, command chaining (`+` separator), `runCommand` dispatch switch
+
+### Key patterns
+
+- **Window selectors**: Commands accept `<index>`, `id=<CGWindowID>`, or `title=<pattern>`. The `id=` form auto-detects the owning app, making `--app` optional.
+- **Command chaining**: `+` separates commands sharing `--app` and `--json`. Selectors inherit from the previous command when omitted.
+- **App resolution**: `--app` accepts full bundle IDs or fuzzy name substrings. Exact bundle ID match first, then case-insensitive substring match. Ambiguous matches produce an error listing candidates.
+- **Output**: All query commands support `--json` for structured output and tab-separated text with column headers for human output.
+- **Overlays** (highlight, dim, border, identify): These run an `NSApplication` event loop. Border/dim persist until explicitly removed; highlight auto-dismisses.
+- **Error handling**: Commands `throw WindowToolError`; top-level `do/catch` prints to stderr and exits 1.
 
 ## Feature requests
 
@@ -31,6 +70,7 @@ Feature requests live in `.worktrees/feature-requests/FEATURE_REQUESTS.md` on th
 
 - `bin/` is for project executables (the compiled `window-tool` binary)
 - `script/` is for dev tooling (feature requests management, etc.)
+- `VERSION` constant in source is bumped by `release.sh`
 
 ## Releasing
 
