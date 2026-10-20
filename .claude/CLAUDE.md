@@ -78,21 +78,26 @@ Use `./release.sh` for version tagging. See README for details.
 
 ## Pre-commit review
 
-Before every commit, launch the following 5 agents in parallel as background tasks. Each agent reviews **only the changes being committed** (use `git diff --cached` for staged changes, or the topic branch diff for branch-scoped review).
+Before every commit, launch two review agents in parallel as background tasks, plus up to three specialists when the change calls for them. Each agent reviews **only the changes being committed** (use `git diff --cached` for staged changes, or the topic branch diff for branch-scoped review).
 
-### Agents
+### Default agents (always)
 
-Launch each as a background Agent, passing it the diff and the contents of its agent definition file:
+1. **Supportive reviewer** — Assumes the change is worth making and checks that it delivers: does it do what it set out to, are docs and help in step, what small improvements would make it land better.
+2. **Skeptical reviewer** — Looks for reasons not to ship: bugs, edge cases, regressions, behavior changes that break existing users or scripts, and complexity the change doesn't need.
 
-1. **Workflow Automator** (`.claude/agents/workflow-automator.md`) — Evaluates whether changes support composable, scriptable automation workflows.
-2. **AI Agent** (`.claude/agents/ai-agent.md`) — Evaluates discoverability, consistency, and machine-parseable behavior.
-3. **Minimalist Architect** (`.claude/agents/minimalist-architect.md`) — Reviews code quality, complexity, idiomatic Swift, and architecture.
-4. **First-Day Contributor** (`.claude/agents/first-day-contributor.md`) — Evaluates whether patterns are obvious and the codebase is easy to ramp up on.
-5. **CLI UX Critic** (`.claude/agents/cli-ux-critic.md`) — Reviews the external interface: naming, help text, error messages, and consistency.
+### Specialists (0–3, only when the change needs that perspective)
+
+Launch each as a background Agent, passing it the diff and the contents of its agent definition file. Pick by what the change touches; most small changes need none.
+
+- **Workflow Automator** (`.claude/agents/workflow-automator.md`) — Changes to chaining, exit codes, or anything scripts compose with.
+- **AI Agent** (`.claude/agents/ai-agent.md`) — Changes to `--json` output, `commands --json`, error codes, or discoverability.
+- **Minimalist Architect** (`.claude/agents/minimalist-architect.md`) — Non-trivial code: new abstractions, shared helpers, refactors.
+- **First-Day Contributor** (`.claude/agents/first-day-contributor.md`) — New patterns or conventions others will copy.
+- **CLI UX Critic** (`.claude/agents/cli-ux-critic.md`) — New or renamed commands and flags, help text, error messages.
 
 ### Instructions for agents
 
-- Each agent should read its definition file, then review the diff.
+- Each specialist should read its definition file; every agent then reviews the diff.
 - Each agent should also read any files touched by the diff for full context.
 - Each agent should return: a short summary, a list of issues found (if any), and a severity for each issue (minor, major, critical).
 - If an agent finds **no issues**, it should say so briefly.
